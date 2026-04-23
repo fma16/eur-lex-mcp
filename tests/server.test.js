@@ -3,6 +3,11 @@ import assert from "node:assert/strict";
 
 import { formatEurLexHttpError, normalizeSearchResponse } from "../server/eurlex-client.js";
 import {
+  extractArticleFromXhtml,
+  extractRecitalsFromXhtml,
+  extractTocFromXhtml
+} from "../server/legal-text.js";
+import {
   parseCelex,
   parseLanguage,
   parsePage,
@@ -144,4 +149,63 @@ test("formatEurLexHttpError clarifies WS_QUERY_SYNTAX_ERROR", () => {
   const message = formatEurLexHttpError(500, faultXml);
   assert.match(message, /Invalid EUR-Lex expert query syntax/i);
   assert.match(message, /DN = 32016R0679/);
+});
+
+test("extractArticleFromXhtml excludes recitals and returns article content", () => {
+  const xhtml = `
+    <div class="eli-subdivision" id="pbl_1">
+      <div class="eli-subdivision" id="rct_1"><p class="oj-normal">(1) Recital text</p></div>
+    </div>
+    <div class="eli-subdivision" id="enc_1">
+      <div class="eli-subdivision" id="art_8">
+        <p class="oj-ti-art">Article 8</p>
+        <div class="eli-title" id="art_8.tit_1"><p class="oj-sti-art">Titre article 8</p></div>
+        <div><p class="oj-normal">Contenu article 8.</p></div>
+      </div>
+    </div>
+  `;
+
+  const article = extractArticleFromXhtml(xhtml, "8");
+  assert.ok(article);
+  assert.equal(article.article_id, "art_8");
+  assert.match(article.text, /Contenu article 8/);
+  assert.doesNotMatch(article.text, /Recital text/);
+});
+
+test("extractRecitalsFromXhtml returns preamble text", () => {
+  const xhtml = `
+    <div class="eli-subdivision" id="pbl_1">
+      <div class="eli-subdivision" id="rct_1"><p class="oj-normal">(1) Recital text</p></div>
+    </div>
+    <div class="eli-subdivision" id="art_1"><p class="oj-ti-art">Article premier</p></div>
+  `;
+
+  const recitals = extractRecitalsFromXhtml(xhtml);
+  assert.ok(recitals);
+  assert.match(recitals.text, /Recital text/);
+});
+
+test("extractTocFromXhtml returns numbered chapter/article entries with titles", () => {
+  const xhtml = `
+    <div id="cpt_I">
+      <p class="oj-ti-section-1">CHAPITRE I</p>
+      <div class="eli-title" id="cpt_I.tit_1"><p>Dispositions générales</p></div>
+      <div class="eli-subdivision" id="art_1">
+        <p class="oj-ti-art">Article premier</p>
+        <div class="eli-title" id="art_1.tit_1"><p>Objet</p></div>
+      </div>
+    </div>
+  `;
+
+  const toc = extractTocFromXhtml(xhtml);
+  const chapter = toc.find((entry) => entry.id === "cpt_I");
+  const article = toc.find((entry) => entry.id === "art_1");
+  assert.ok(chapter);
+  assert.equal(chapter.type, "chapter");
+  assert.match(chapter.label, /CHAPITRE I/);
+  assert.match(chapter.title, /Dispositions générales/i);
+  assert.ok(article);
+  assert.equal(article.type, "article");
+  assert.match(article.label, /Article premier/i);
+  assert.match(article.title, /Objet/i);
 });

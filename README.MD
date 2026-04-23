@@ -32,6 +32,36 @@ Inputs:
 - `language` (optional 2-letter code, default `en`)
 - `timeout_ms` (optional integer)
 
+### `get_legal_text`
+Retrieves legal text from a CELEX document with three scopes:
+- `article` (default): returns one targeted article and excludes recitals.
+- `recitals`: returns the preamble/recitals section.
+- `full_text`: returns the full text.
+
+Inputs:
+- `celex` (required string, validated)
+- `language` (optional 2-letter code, default `fr`)
+- `scope` (optional enum: `article`, `recitals`, `full_text`; default `article`)
+- `article` (required when `scope=article`, e.g. `8`, `article 8`, `premier`)
+- `timeout_ms` (optional integer)
+
+Important behavior:
+- In `article` scope, recitals are intentionally excluded. Extraction starts from the article structure (`art_*`) in the enacting terms.
+- To access recitals explicitly, call the same tool with `scope=recitals`.
+- To access the complete text (including recitals and enacting terms), call with `scope=full_text`.
+
+### `get_document_toc`
+Retrieves a structured table of contents so the LLM can target later lookups.
+
+Inputs:
+- `celex` (required string, validated)
+- `language` (optional 2-letter code, default `fr`)
+- `timeout_ms` (optional integer)
+
+Output includes numbered entries and titles for structural levels when present:
+- parts/titles/chapters/sections/subsections/articles
+- each entry carries its identifier, numbering label, and title
+
 ## Quick start
 
 ```bash

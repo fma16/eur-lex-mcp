@@ -47,6 +47,14 @@
     {
       "name": "get_document_by_celex",
       "description": "Fetch a document by exact CELEX identifier."
+    },
+    {
+      "name": "get_legal_text",
+      "description": "Retrieve legal text by CELEX (article-level, recitals-only, or full text). Default language is French and can be changed."
+    },
+    {
+      "name": "get_document_toc",
+      "description": "Retrieve the document table of contents (chapters/sections/articles) with numbering and titles. Default language is French and can be changed."
     }
   ],
   "compatibility": {

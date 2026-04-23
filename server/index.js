@@ -11,13 +11,19 @@ import {
 import { EurLexSoapClient } from "./eurlex-client.js";
 import { createLogger } from "./logger.js";
 import {
+  extractArticleFromXhtml,
+  extractFullTextFromXhtml,
+  extractRecitalsFromXhtml,
+  extractTocFromXhtml
+} from "./legal-text.js";
+import {
   parseBoolean,
   parseCelex,
-  parseLanguage,
   parsePage,
   parsePageSize,
   parseTimeoutMs,
-  sanitizeString
+  sanitizeString,
+  parseLanguage
 } from "./validation.js";
 import { errorResponse, successResponse, toolTextPayload } from "./responses.js";
 
@@ -145,6 +151,72 @@ const tools = [
       },
       required: ["celex"]
     }
+  },
+  {
+    name: "get_legal_text",
+    description:
+      "Get legal text for a CELEX document. By default, returns a specific article and excludes recitals. Can also return recitals-only or full text.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        celex: {
+          type: "string",
+          description: "CELEX identifier, e.g. 32022R2065"
+        },
+        language: {
+          type: "string",
+          description: "Two-letter language code",
+          default: "fr"
+        },
+        scope: {
+          type: "string",
+          enum: ["article", "recitals", "full_text"],
+          default: "article",
+          description:
+            "Text scope. 'article' excludes recitals and requires the 'article' field."
+        },
+        article: {
+          type: "string",
+          description:
+            "Article identifier (required when scope='article'), e.g. 5, 8, article 8, premier"
+        },
+        timeout_ms: {
+          type: "integer",
+          minimum: 1000,
+          maximum: 60000,
+          description: "Optional timeout override"
+        }
+      },
+      required: ["celex"]
+    }
+  },
+  {
+    name: "get_document_toc",
+    description:
+      "Get the structured table of contents (chapters, sections, articles) with numbering and titles for a CELEX document.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        celex: {
+          type: "string",
+          description: "CELEX identifier, e.g. 32022R2065"
+        },
+        language: {
+          type: "string",
+          description: "Two-letter language code",
+          default: "fr"
+        },
+        timeout_ms: {
+          type: "integer",
+          minimum: 1000,
+          maximum: 60000,
+          description: "Optional timeout override"
+        }
+      },
+      required: ["celex"]
+    }
   }
 ];
 
@@ -203,6 +275,127 @@ async function runGetDocumentByCelex(args) {
   });
 }
 
+async function runGetLegalText(args) {
+  const celex = parseCelex(args.celex);
+  const language = parseLanguage(args.language ?? "fr");
+  const timeoutMs = parseTimeoutMs(args.timeout_ms, cli.defaultTimeoutMs);
+  const scope = sanitizeString(args.scope ?? "article", "scope", 32).toLowerCase();
+  const allowedScopes = new Set(["article", "recitals", "full_text"]);
+  if (!allowedScopes.has(scope)) {
+    throw new Error("Invalid scope: expected one of article, recitals, full_text");
+  }
+
+  if (scope === "article" && (args.article === undefined || args.article === null || args.article === "")) {
+    throw new Error("Missing required field: article (when scope='article')");
+  }
+
+  const resolved = await eurLexClient.getDocumentStreamByCelex({
+    celex,
+    language,
+    timeoutMs,
+    preferredMimeTypes: ["application/xhtml+xml", "application/xml", "application/pdf"]
+  });
+
+  const contentType = resolved.stream.content_type || "";
+  const body = resolved.stream.body || "";
+  const isXhtml = contentType.includes("application/xhtml+xml") || body.includes('class="eli-subdivision"');
+  if (!isXhtml) {
+    return errorResponse("Unsupported content stream for text extraction", {
+      code: "UNSUPPORTED_CONTENT_STREAM",
+      celex,
+      selected_manifestation: resolved.selected_manifestation,
+      content_type: contentType
+    });
+  }
+
+  if (scope === "article") {
+    const article = sanitizeString(String(args.article), "article", 32);
+    const extracted = extractArticleFromXhtml(body, article);
+    if (!extracted) {
+      return errorResponse("Article not found", {
+        code: "ARTICLE_NOT_FOUND",
+        celex,
+        article
+      });
+    }
+
+    return successResponse({
+      celex,
+      language,
+      scope: "article",
+      note: "Recitals are excluded for article-level extraction.",
+      article: {
+        requested: article,
+        id: extracted.article_id,
+        heading: extracted.heading,
+        title: extracted.title,
+        text: extracted.text
+      },
+      source: {
+        eurlex_url: resolved.source_url,
+        doc_url: resolved.stream.url,
+        selected_manifestation: resolved.selected_manifestation
+      }
+    });
+  }
+
+  if (scope === "recitals") {
+    const recitals = extractRecitalsFromXhtml(body);
+    if (!recitals) {
+      return errorResponse("Recitals section not found", {
+        code: "RECITALS_NOT_FOUND",
+        celex
+      });
+    }
+
+    return successResponse({
+      celex,
+      language,
+      scope: "recitals",
+      recitals
+    });
+  }
+
+  return successResponse({
+    celex,
+    language,
+    scope: "full_text",
+    text: extractFullTextFromXhtml(body)
+  });
+}
+
+async function runGetDocumentToc(args) {
+  const celex = parseCelex(args.celex);
+  const language = parseLanguage(args.language ?? "fr");
+  const timeoutMs = parseTimeoutMs(args.timeout_ms, cli.defaultTimeoutMs);
+
+  const resolved = await eurLexClient.getDocumentStreamByCelex({
+    celex,
+    language,
+    timeoutMs,
+    preferredMimeTypes: ["application/xhtml+xml", "application/xml", "application/pdf"]
+  });
+
+  const contentType = resolved.stream.content_type || "";
+  const body = resolved.stream.body || "";
+  const isXhtml = contentType.includes("application/xhtml+xml") || body.includes('class="eli-subdivision"');
+  if (!isXhtml) {
+    return errorResponse("Unsupported content stream for TOC extraction", {
+      code: "UNSUPPORTED_CONTENT_STREAM",
+      celex,
+      selected_manifestation: resolved.selected_manifestation,
+      content_type: contentType
+    });
+  }
+
+  const toc = extractTocFromXhtml(body);
+  return successResponse({
+    celex,
+    language,
+    toc
+  });
+}
+
 server.setRequestHandler(CallToolRequestSchema, async (request) => {
   const toolName = request.params.name;
   const args = request.params.arguments || {};
@@ -216,6 +409,14 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
     if (toolName === "get_document_by_celex") {
       return toolTextPayload(await runGetDocumentByCelex(args));
+    }
+
+    if (toolName === "get_legal_text") {
+      return toolTextPayload(await runGetLegalText(args));
+    }
+
+    if (toolName === "get_document_toc") {
+      return toolTextPayload(await runGetDocumentToc(args));
     }
 
     throw new McpError(ErrorCode.MethodNotFound, `Unknown tool: ${toolName}`);

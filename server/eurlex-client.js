@@ -78,6 +78,27 @@ function resolveCelex(notice) {
   return "";
 }
 
+function resolveCellarIdFromUrl(url) {
+  const match = String(url || "").match(/uri=cellar:([0-9a-f-]{36})/i);
+  return match ? match[1].toLowerCase() : "";
+}
+
+function resolveCellarId(notice, htmlUrl) {
+  const works = asArray(notice?.WORK);
+  for (const work of works) {
+    const uris = asArray(work?.URI);
+    for (const uri of uris) {
+      const type = textValue(uri?.TYPE ?? uri?.type).toLowerCase();
+      const identifier = textValue(uri?.IDENTIFIER);
+      if (type === "cellar" && identifier) {
+        return identifier.toLowerCase();
+      }
+    }
+  }
+
+  return resolveCellarIdFromUrl(htmlUrl);
+}
+
 function resolveHtmlUrl(documentLinks) {
   const links = asArray(documentLinks);
   const html = links.find((link) => String(link?.TYPE || link?.type || "").toLowerCase() === "html");
@@ -98,11 +119,13 @@ export function normalizeSearchResponse(parsedXml) {
       const celex = resolveCelex(notice);
       const title = resolveDocumentTitle(notice?.EXPRESSION);
       const url = resolveHtmlUrl(node?.document_link);
+      const cellarId = resolveCellarId(notice, url);
       if (!celex || !title) return null;
       return {
         celex,
         title: title.trim(),
-        url
+        url,
+        cellar_id: cellarId || null
       };
     })
     .filter(Boolean);
@@ -127,7 +150,7 @@ export class EurLexSoapClient {
     return this.allowInsecureHttp ? DEFAULT_SERVICE_HTTP : DEFAULT_SERVICE_HTTPS;
   }
 
-  async search({ query, language, page, pageSize, timeoutMs }) {
+  async searchRaw({ query, language, page, pageSize, timeoutMs }) {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), timeoutMs);
 
@@ -171,7 +194,11 @@ export class EurLexSoapClient {
         throw new Error(`EUR-Lex SOAP fault: ${faultMessage}`);
       }
       const normalized = normalizeSearchResponse(parsed);
-      return normalized;
+      return {
+        rawXml,
+        parsed,
+        normalized
+      };
     } catch (error) {
       if (error?.name === "AbortError") {
         throw new Error(`EUR-Lex request timed out after ${timeoutMs}ms`);
@@ -180,6 +207,179 @@ export class EurLexSoapClient {
     } finally {
       clearTimeout(timeout);
     }
+  }
+
+  async search(params) {
+    const response = await this.searchRaw(params);
+    return response.normalized;
+  }
+
+  async getDocumentStreamByCelex({
+    celex,
+    language = "fr",
+    timeoutMs,
+    preferredMimeTypes = ["application/xhtml+xml", "application/xml", "application/pdf"]
+  }) {
+    const response = await this.searchRaw({
+      query: `DN = ${celex}`,
+      language,
+      page: 1,
+      pageSize: 1,
+      timeoutMs
+    });
+
+    const document = response.normalized.results[0] || null;
+    if (!document) {
+      throw new Error(`Document not found for CELEX ${celex}`);
+    }
+
+    const manifestationIds = extractManifestationIds(response.rawXml);
+    if (manifestationIds.length === 0) {
+      throw new Error("No CELLAR manifestation found in EUR-Lex response");
+    }
+
+    const manifestations = [];
+    for (const manifestationId of manifestationIds) {
+      try {
+        const metadata = await this.fetchManifestationMetadata(manifestationId, timeoutMs);
+        manifestations.push(metadata);
+      } catch (error) {
+        this.logger.debug("Skipping manifestation metadata fetch failure", {
+          manifestationId,
+          message: error instanceof Error ? error.message : String(error)
+        });
+      }
+    }
+
+    if (manifestations.length === 0) {
+      throw new Error("Unable to resolve manifestation metadata from CELLAR");
+    }
+
+    const ranked = manifestations
+      .map((item) => ({
+        ...item,
+        rank: rankMimeType(item.mimeType, preferredMimeTypes)
+      }))
+      .sort((a, b) => a.rank - b.rank || a.manifestationId.localeCompare(b.manifestationId));
+
+    const selected = ranked[0];
+    const stream = await this.fetchDocStream(selected.manifestationId, timeoutMs);
+
+    return {
+      celex: document.celex,
+      title: document.title,
+      language,
+      cellar_id: document.cellar_id || extractCellarIdFromManifestation(selected.manifestationId),
+      source_url: document.url,
+      selected_manifestation: {
+        id: selected.manifestationId,
+        mime_type: selected.mimeType,
+        rdf_url: selected.rdfUrl
+      },
+      manifestations: ranked.map((item) => ({
+        id: item.manifestationId,
+        mime_type: item.mimeType,
+        rdf_url: item.rdfUrl
+      })),
+      stream
+    };
+  }
+
+  async fetchManifestationMetadata(manifestationId, timeoutMs) {
+    const rdfUrl = `https://publications.europa.eu/resource/cellar/${manifestationId}/rdf/object/full`;
+    const rdf = await fetchTextWithTimeout(rdfUrl, timeoutMs);
+    const mimeType = extractManifestationMimeType(rdf);
+
+    return {
+      manifestationId,
+      mimeType,
+      rdfUrl
+    };
+  }
+
+  async fetchDocStream(manifestationId, timeoutMs) {
+    const urls = [
+      `http://publications.europa.eu/resource/cellar/${manifestationId}/DOC_1`,
+      `https://publications.europa.eu/resource/cellar/${manifestationId}/DOC_1`
+    ];
+
+    const errors = [];
+    for (const url of urls) {
+      try {
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), timeoutMs);
+        try {
+          const response = await fetch(url, {
+            method: "GET",
+            signal: controller.signal
+          });
+          if (!response.ok) {
+            errors.push(`${url} -> HTTP ${response.status}`);
+            continue;
+          }
+
+          const contentType = (response.headers.get("content-type") || "").toLowerCase();
+          const body = await response.text();
+          return {
+            url,
+            content_type: contentType,
+            body
+          };
+        } finally {
+          clearTimeout(timeout);
+        }
+      } catch (error) {
+        errors.push(`${url} -> ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
+
+    throw new Error(`Unable to download DOC_1 stream: ${errors.join(" | ")}`);
+  }
+}
+
+function extractManifestationIds(rawXml) {
+  const ids = new Set();
+  const re = /https?:\/\/publications\.europa\.eu\/resource\/cellar\/([0-9a-f-]{36}\.[0-9]{4}\.[0-9]{2})/gi;
+  let match;
+  while ((match = re.exec(String(rawXml || ""))) !== null) {
+    ids.add(match[1].toLowerCase());
+  }
+  return [...ids];
+}
+
+function extractManifestationMimeType(rdf) {
+  const match = String(rdf || "").match(
+    /<[^>]*manifestationMimeType[^>]*>([^<]+)<\/[^>]*manifestationMimeType>/i
+  );
+  return (match?.[1] || "").trim().toLowerCase();
+}
+
+function rankMimeType(mimeType, preferredMimeTypes) {
+  const normalized = String(mimeType || "").toLowerCase();
+  const rank = preferredMimeTypes.findIndex((preferred) => normalized.includes(preferred));
+  return rank === -1 ? preferredMimeTypes.length + 1 : rank;
+}
+
+function extractCellarIdFromManifestation(manifestationId) {
+  const match = String(manifestationId || "").match(/^([0-9a-f-]{36})\.[0-9]{4}\.[0-9]{2}$/i);
+  return match ? match[1].toLowerCase() : null;
+}
+
+async function fetchTextWithTimeout(url, timeoutMs) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetch(url, {
+      method: "GET",
+      signal: controller.signal
+    });
+    const body = await response.text();
+    if (!response.ok) {
+      throw new Error(`${url} -> HTTP ${response.status}`);
+    }
+    return body;
+  } finally {
+    clearTimeout(timeout);
   }
 }
 
