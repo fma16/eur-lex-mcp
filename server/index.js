@@ -83,14 +83,16 @@ const server = new Server(
 const tools = [
   {
     name: "expert_search",
-    description: "Run an EUR-Lex expert query and return normalized results",
+    description:
+      "Run an EUR-Lex expert query (expert syntax only, e.g. DN = 32016R0679) and return normalized results",
     inputSchema: {
       type: "object",
       additionalProperties: false,
       properties: {
         query: {
           type: "string",
-          description: "EUR-Lex expert query syntax"
+          description:
+            "EUR-Lex expert query syntax (not natural language), e.g. DN = 32016R0679"
         },
         language: {
           type: "string",
@@ -179,7 +181,7 @@ async function runGetDocumentByCelex(args) {
   const timeoutMs = parseTimeoutMs(args.timeout_ms, cli.defaultTimeoutMs);
 
   const data = await eurLexClient.search({
-    query: `DN = '${celex}'`,
+    query: `DN = ${celex}`,
     language,
     page: 1,
     pageSize: 1,

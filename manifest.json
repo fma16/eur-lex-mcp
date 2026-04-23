@@ -42,7 +42,7 @@
   "tools": [
     {
       "name": "expert_search",
-      "description": "Run an EUR-Lex expert query and return normalized results."
+      "description": "Run an EUR-Lex expert query (expert syntax only, e.g. DN = 32016R0679) and return normalized results."
     },
     {
       "name": "get_document_by_celex",

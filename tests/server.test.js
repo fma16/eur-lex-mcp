@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { normalizeSearchResponse } from "../server/eurlex-client.js";
+import { formatEurLexHttpError, normalizeSearchResponse } from "../server/eurlex-client.js";
 import {
   parseCelex,
   parseLanguage,
@@ -59,6 +59,70 @@ test("normalizeSearchResponse returns compact structured result", () => {
   assert.equal(normalized.results[0].celex, "32016R0679");
 });
 
+test("normalizeSearchResponse handles direct searchResults body and document_link attribute format", () => {
+  const parsed = {
+    Envelope: {
+      Body: {
+        searchResults: {
+          totalhits: "1",
+          page: "1",
+          result: {
+            content: {
+              NOTICE: {
+                ID_CELEX: { VALUE: "32016R0679" },
+                EXPRESSION: {
+                  EXPRESSION_TITLE: {
+                    VALUE: "Reglement general sur la protection des donnees"
+                  }
+                }
+              }
+            },
+            document_link: [{ type: "html", "#text": "https://example.test/rgpd" }]
+          }
+        }
+      }
+    }
+  };
+
+  const normalized = normalizeSearchResponse(parsed);
+  assert.equal(normalized.total, 1);
+  assert.equal(normalized.page, 1);
+  assert.equal(normalized.page_size, 1);
+  assert.equal(normalized.results[0].url, "https://example.test/rgpd");
+});
+
+test("normalizeSearchResponse extracts CELEX from NOTICE.WORK.ID_CELEX", () => {
+  const parsed = {
+    Envelope: {
+      Body: {
+        searchResults: {
+          totalhits: "1",
+          page: "1",
+          result: {
+            content: {
+              NOTICE: {
+                EXPRESSION: {
+                  EXPRESSION_TITLE: {
+                    VALUE: "RGPD"
+                  }
+                },
+                WORK: {
+                  ID_CELEX: { VALUE: "32016R0679" }
+                }
+              }
+            },
+            document_link: [{ type: "html", "#text": "https://example.test/rgpd" }]
+          }
+        }
+      }
+    }
+  };
+
+  const normalized = normalizeSearchResponse(parsed);
+  assert.equal(normalized.results.length, 1);
+  assert.equal(normalized.results[0].celex, "32016R0679");
+});
+
 test("response helpers produce consistent shape", () => {
   const ok = successResponse({ hello: "world" });
   assert.deepEqual(ok, {
@@ -71,4 +135,13 @@ test("response helpers produce consistent shape", () => {
   assert.equal(failure.ok, false);
   assert.equal(failure.error.message, "boom");
   assert.equal(failure.error.code, "ERR");
+});
+
+test("formatEurLexHttpError clarifies WS_QUERY_SYNTAX_ERROR", () => {
+  const faultXml =
+    "<?xml version='1.0' encoding='UTF-8'?><S:Envelope xmlns:S='http://www.w3.org/2003/05/soap-envelope'><S:Body><ns1:Fault xmlns:ns1='http://www.w3.org/2003/05/soap-envelope'><ns1:Code><ns1:Value>ns1:Sender</ns1:Value><ns1:Subcode><ns1:Value xmlns:ns2='http://eur-lex.europa.eu/search'>ns2:WS_QUERY_SYNTAX_ERROR</ns1:Value></ns1:Subcode></ns1:Code><ns1:Reason><ns1:Text xml:lang='en'>Erreur a la ligne 1, caractere 8.</ns1:Text></ns1:Reason></ns1:Fault></S:Body></S:Envelope>";
+
+  const message = formatEurLexHttpError(500, faultXml);
+  assert.match(message, /Invalid EUR-Lex expert query syntax/i);
+  assert.match(message, /DN = 32016R0679/);
 });
