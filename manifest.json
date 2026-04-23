@@ -1,0 +1,110 @@
+{
+  "$schema": "https://raw.githubusercontent.com/modelcontextprotocol/mcpb/main/dist/mcpb-manifest.schema.json",
+  "manifest_version": "0.3",
+  "name": "eur-lex-search",
+  "display_name": "EUR-Lex Search",
+  "version": "1.0.0",
+  "description": "Search EUR-Lex legal documents using MCP tools.",
+  "long_description": "Local MCP Bundle for querying EUR-Lex via SOAP with strict input validation, timeout controls, and consistent structured JSON responses for tool consumers.",
+  "author": {
+    "name": "EUR-Lex MCP Contributors"
+  },
+  "documentation": "https://github.com/scimorph/eur-lex-mcp",
+  "license": "MIT",
+  "privacy_policies": [
+    "https://eur-lex.europa.eu/content/legal-notice/legal-notice.html"
+  ],
+  "keywords": [
+    "eur-lex",
+    "legal",
+    "eu-law",
+    "mcp",
+    "search"
+  ],
+  "server": {
+    "type": "node",
+    "entry_point": "server/index.js",
+    "mcp_config": {
+      "command": "node",
+      "args": [
+        "${__dirname}/server/index.js",
+        "--log-level=${user_config.log_level}",
+        "--default-timeout-ms=${user_config.default_timeout_ms}",
+        "--max-page-size=${user_config.max_page_size}"
+      ],
+      "env": {
+        "EURLEX_USERNAME": "${user_config.eurlex_username}",
+        "EURLEX_PASSWORD": "${user_config.eurlex_password}",
+        "ALLOW_INSECURE_HTTP": "${user_config.allow_insecure_http}"
+      }
+    }
+  },
+  "tools": [
+    {
+      "name": "expert_search",
+      "description": "Run an EUR-Lex expert query and return normalized results."
+    },
+    {
+      "name": "get_document_by_celex",
+      "description": "Fetch a document by exact CELEX identifier."
+    }
+  ],
+  "compatibility": {
+    "platforms": [
+      "darwin",
+      "linux",
+      "win32"
+    ],
+    "runtimes": {
+      "node": ">=18.17.0"
+    }
+  },
+  "user_config": {
+    "eurlex_username": {
+      "type": "string",
+      "title": "EUR-Lex Username",
+      "description": "EUR-Lex webservice username.",
+      "required": true,
+      "sensitive": true
+    },
+    "eurlex_password": {
+      "type": "string",
+      "title": "EUR-Lex Password",
+      "description": "EUR-Lex webservice password.",
+      "required": true,
+      "sensitive": true
+    },
+    "default_timeout_ms": {
+      "type": "number",
+      "title": "Default timeout (ms)",
+      "description": "Default tool request timeout in milliseconds.",
+      "default": 15000,
+      "min": 1000,
+      "max": 60000,
+      "required": false
+    },
+    "max_page_size": {
+      "type": "number",
+      "title": "Maximum page size",
+      "description": "Upper limit for result page size.",
+      "default": 50,
+      "min": 1,
+      "max": 100,
+      "required": false
+    },
+    "allow_insecure_http": {
+      "type": "boolean",
+      "title": "Allow insecure EUR-Lex transport",
+      "description": "Allow HTTP endpoint if HTTPS endpoint is unavailable.",
+      "default": false,
+      "required": false
+    },
+    "log_level": {
+      "type": "string",
+      "title": "Log level",
+      "description": "Server log verbosity.",
+      "default": "info",
+      "required": false
+    }
+  }
+}

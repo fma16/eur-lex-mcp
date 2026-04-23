@@ -1,0 +1,21 @@
+{
+  "name": "eur-lex-mcpb",
+  "version": "1.0.0",
+  "description": "EUR-Lex MCP Bundle (MCPB) server for expert legal search",
+  "type": "module",
+  "main": "server/index.js",
+  "private": true,
+  "engines": {
+    "node": ">=18.17.0"
+  },
+  "scripts": {
+    "start": "node server/index.js",
+    "check:manifest": "node scripts/validate-manifest.js",
+    "check:server": "node --test tests/server.test.js",
+    "check": "npm run check:manifest && npm run check:server"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.12.1",
+    "fast-xml-parser": "^4.5.0"
+  }
+}

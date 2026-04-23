@@ -1,260 +1,65 @@
-# EUR-LEX MCP Server
+# EUR-Lex MCPB Bundle
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Python Version](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
+Production-oriented MCP Bundle (MCPB) for EUR-Lex expert search using a local Node.js MCP server (`@modelcontextprotocol/sdk`) over stdio.
 
-This server acts as a modern, AI-friendly bridge to the official EUR-Lex SOAP webservice. It exposes the complex EUR-Lex API as a simple and powerful **Model Context Protocol (MCP)** server, making the entire body of European Union law accessible to modern AI agents, developer tools, and applications.
+## What this includes
 
-By wrapping the legacy SOAP API, this server unlocks use cases in automated legal research, compliance monitoring, policy analysis, and more, without requiring AI agents to understand the complexities of WSDL or XML.
+- MCPB-compliant `manifest.json` (manifest v0.3)
+- Node MCP server at `server/index.js`
+- Defensive input validation and bounded limits
+- Timeout management with request abortion
+- Structured, consistent JSON tool payloads
+- Logging with configurable log levels
+- Validation/test scripts for quick host-readiness checks
 
-## ✨ Features
+## Tools
 
-*   **Dual-Mode Transport**: Runs over **STDIO** for secure, local integration with desktop applications (like Claude Desktop, Cursor) and over **HTTP** for remote access by AI agents and web services.
-*   **Expert Search Tool**: Provides an `expert_search` tool that allows for powerful, flexible querying using the native [EUR-Lex expert search syntax](https://eur-lex.europa.eu/content/help/search/expert-search.html).
-*   **Direct Document Access**: Includes a `get_document_by_celex` resource template for fetching specific legal documents directly via a clean URI (`resource://eurlex/document/{celex_number}`).
-*   **Clean, Structured Output**: Automatically parses the verbose SOAP/XML responses into a clean, easy-to-use JSON format, perfect for LLM consumption.
-*   **Easy Installation**: Can be easily installed into compatible clients using the `fastmcp` command-line tool.
+### `expert_search`
+Runs an EUR-Lex expert query and returns normalized results.
 
-## 🔌 Prerequisites
+Inputs:
+- `query` (required string)
+- `language` (optional 2-letter code, default `en`)
+- `page` (optional integer, default `1`)
+- `page_size` (optional integer, default `10`, bounded by config)
+- `timeout_ms` (optional integer)
 
-Before you begin, ensure you have the following:
+### `get_document_by_celex`
+Retrieves one document by exact CELEX identifier.
 
-1.  **Python 3.11+** and the `uv` package manager. If you don't have `uv`, install it with:
-    ```bash
-    pip install uv
-    ```
-2.  **EUR-LEX Webservice Credentials**. You must register for a webservice account to get a username and password. You can do this by following the "Webservice registration" link on the EUR-Lex website after logging in.
+Inputs:
+- `celex` (required string, validated)
+- `language` (optional 2-letter code, default `en`)
+- `timeout_ms` (optional integer)
 
-## 🚀 Setup & Installation
-
-Follow these steps to get the server up and running on your local machine.
-
-### 1. Clone the Repository (This is only necessary if you want to install it to Claude Desktop with the practical `fastmcp install` command)
-
-Clone this project to your local machine.
-
-```bash
-git clone https://github.com/scimorph/eur-lex-mcp.git
-cd eur-lex-mcp
-```
-
-### 2. Set Up the Environment
-
-Create and activate a virtual environment, then install the required dependencies using `uv`.
+## Quick start
 
 ```bash
-# Create and activate the virtual environment
-uv venv
-
-# On macOS/Linux
-source .venv/bin/activate
-
-# On Windows
-.venv\Scripts\activate
-
-# Install dependencies
-uv pip install -r pyproject.toml
+npm install
+cp .env.example .env
+# Set EURLEX_USERNAME / EURLEX_PASSWORD in your environment
+npm run check
 ```
 
-### 3. Configure Credentials
-
-The server requires your EUR-LEX webservice username and password. The most secure way to provide them is through a `.env` file.
-
-1.  Create a file named `.env` in the root of the project directory.
-2.  **Never commit this file to Git!** It is already included in the `.gitignore`.
-3.  Add your credentials to the `.env` file like this:
-
-    ```env
-    # .env
-    EURLEX_USERNAME="your-eurlex-username"
-    EURLEX_PASSWORD="your-webservice-password"
-    ```
-
-## 🔧 Usage
-
-This server can be run in two modes, depending on your use case.
-
-### Mode 1: For Local Desktop Clients (Claude, Cursor, etc.)
-
-This is the recommended mode for integrating with local applications. The server will run over **STDIO**.
-
-You do not need to run the server manually. Instead, you "install" it into your client application.
-
-#### Using `fastmcp install` (for Claude Desktop)
-
-The easiest way to install the server is with the `fastmcp` CLI:
+Run server manually (stdio):
 
 ```bash
-# Run the install command from the project root
-fastmcp install server.py --name "EUR-LEX Search"
+EURLEX_USERNAME="..." EURLEX_PASSWORD="..." node server/index.js
 ```
 
-This command will automatically detect your `server.py`, read its dependencies, and configure Claude Desktop to run it. Simply **restart Claude Desktop** and the "EUR-LEX Search" tool will be available.
-
-#### Manual Configuration (for other apps + Claude Desktop)
-
-For other applications (optionally for Claude Desktop), you will need to manually configure them to run the `server.py` script. Find the MCP server configuration section in your application's settings and add an entry that executes the script.
-
-```json
-{
-  "mcpServers": {
-    "eurlex-search": {
-      "command": "npx",
-      "args": [
-        "-y",
-        "-p", "fastmcp",
-        "-p", "zeep",
-        "-p", "python-dotenv",
-        "fastmcp", "run", "https://scimorph/eur-lex-mcp/main/server/server.py"
-      ],
-      "env": {
-        "EURLEX_USERNAME": "YOUR_EURLEX_USERNAME",
-        "EURLEX_PASSWORD": "YOUR_WEBSERVICE_PASSWORD"
-      }
-    }
-  }
-}
-```
-
-### Mode 2: As a Remote HTTP Service
-#### 🐳 Running with Docker (If you don't want to clone the repo)
-
-For running the server in HTTP mode, the easiest and most portable method is to use Docker. This approach encapsulates all dependencies and requires no local Python environment setup.
-
-You will need [Docker Desktop](https://www.docker.com/products/docker-desktop/) installed on your machine.
-
-#### Option A: Run the Pre-built Image from Docker Hub (Easiest)
-
-We provide a pre-built Docker image on Docker Hub for your convenience.
-
-**1. Create a Credentials File**
-
-On your local machine, create a file named `eurlex.env`. This file will securely store your credentials and will be passed to the container at runtime.
-
-```env
-# eurlex.env
-EURLEX_USERNAME="YOUR_EURLEX_USERNAME"
-EURLEX_PASSWORD="YOUR_WEBSERVICE_PASSWORD"
-```
-
-**2. Run the Docker Container**
-
-Execute the following command in your terminal. It will pull the image from Docker Hub and run it with your credentials.
+## MCPB packaging
 
 ```bash
-docker run -d --name eur-lex-mcp -p 8000:8000 --env-file ./eurlex.env --rm enzofanaccount/eur-lex-mcp:latest
+npm install -g @anthropic-ai/mcpb
+mcpb pack .
 ```
 
-That's it! The server is now running and accessible at `http://localhost:8000`.
+See full setup and verification guide in `docs/MCPB_SETUP.md`.
 
-*   `-d`: Runs the container in detached mode (in the background).
-*   `--name eurlex-mcp`: Gives the container a memorable name.
-*   `-p 8000:8000`: Maps port 8000 from the container to port 8000 on your local machine.
-*   `--env-file ./eurlex.env`: **This is how we handle credentials.** It securely injects the variables from your local `eurlex.env` file into the container's environment.
-*   `--rm`: Automatically removes the container when it stops.
+## Security and reliability notes
 
-#### Option B: Build and Run the Image Locally
-
-If you prefer to build the image yourself:
-
-**1. Create the `Dockerfile`**
-
-Create a file named `Dockerfile` in a new directory and paste the contents from the [Dockerfile](Dockerfile) above. Make sure to update the `ADD` line with the correct URL to your `server.py` file.
-
-**2. Create the `eurlex.env` Credentials File**
-
-Create the `eurlex.env` file in the same directory as your `Dockerfile`, as described in Option A.
-
-**3. Build the Docker Image**
-
-From the directory containing your `Dockerfile` and `eurlex.env`, run:
-```bash
-docker build -t eurlex-mcp-server .
-```
-
-**4. Run Your Locally Built Image**
-
-Run the same command as before, but use the local image name:
-```bash
-docker run -d --name eur-lex-mcp -p 8000:8000 --env-file ./eurlex.env --rm eurlex-mcp-server
-```
-
-The server is now running and accessible at `http://localhost:8000`.
-
-### Alternative if you cloned the repo:
-
-Run the following command from your terminal:
-
-```bash
-python server.py --transport http
-```
-
-The server will start and be accessible at `http://127.0.0.1:8000`.
-
-You can customize the host and port:
-
-```bash
-python server.py --transport http --host 0.0.0.0 --port 9001
-```
-
-## 📚 API Reference
-
-The EUR-LEX MCP Server exposes the following capabilities:
-
-### Tool: `expert_search`
-
-Performs a flexible search across the EUR-Lex database using the official expert search syntax.
-
-*   **Parameters**:
-    *   `query` (str): The search query, following EUR-Lex syntax. **Required**.
-    *   `language` (str): The two-letter language code for the search. Default: `"en"`.
-    *   `page` (int): The page number of the results. Default: `1`.
-    *   `page_size` (int): The number of results per page. Default: `10`.
-*   **Returns**: A list of document objects.
-
-**Example Return Value:**
-```json
-[
-  {
-    "celex": "32016R0679",
-    "title": "Regulation (EU) 2016/679 of the European Parliament and of the Council...",
-    "url": "http://publications.europa.eu/resource/celex/32016R0679.EN.html"
-  }
-]
-```
-
-### Resource: `get_document_by_celex`
-
-Fetches a single, specific document directly by its CELEX number.
-
-*   **URI Template**: `resource://eurlex/document/{celex_number}`
-*   **Parameters**:
-    *   `celex_number` (str): The unique CELEX identifier of the document.
-*   **Returns**: A single document object.
-
-**Example URI:**
-`resource://eurlex/document/32016R0679`
-
-**Example Return Value:**
-```json
-{
-  "celex": "32016R0679",
-  "title": "Regulation (EU) 2016/679 of the European Parliament and of the Council of 27 April 2016 on the protection of natural persons with regard to the processing of personal data and on the free movement of such data, and repealing Directive 95/46/EC (General Data Protection Regulation) (Text with EEA relevance)",
-  "url": "http://publications.europa.eu/resource/celex/32016R0679.EN.html"
-}
-```
-
-## 🧑‍💻 Development & Contribution
-
-Contributions are welcome! If you'd like to improve the server, please follow these steps:
-
-1.  Fork the repository.
-2.  Clone the fork to your IDE.
-2.  Create a descriptive new branch for your feature (`git checkout -b feature/amazing-feature`).
-3.  Commit your changes (`git commit -m 'Add some amazing feature'`).
-4.  Push to the branch (`git push origin feature/amazing-feature`).
-5.  Open a Pull Request.
-
-## 📄 License
-
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+- Credentials are configured via MCPB `user_config` as sensitive fields.
+- No credentials are logged.
+- Input schemas and runtime validators reject malformed values.
+- Requests use explicit per-call timeout with `AbortController`.
+- Responses are normalized into a stable `{ ok, data, error }` contract.
