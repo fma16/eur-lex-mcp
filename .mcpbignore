@@ -1,0 +1,25 @@
+# Development-only files
+.git/
+.vscode/
+docs/
+tests/
+scripts/
+.pytest_cache/
+__pycache__/
+
+# Non-runtime project artifacts
+.env
+.env.*
+*.log
+Dockerfile
+pyproject.toml
+
+# Keep package manager lockfile optional; include package metadata
+!package.json
+!package-lock.json
+!README.MD
+!LICENSE
+!manifest.json
+!server/**
+!node_modules/**
+server/server.py
