@@ -1,0 +1,1804 @@
+---
+const tools = [
+  {
+    id: "expert_search",
+    name: "expert_search",
+    blurb: "Recherche experte EUR-Lex en syntaxe officielle.",
+    description:
+      "Exécute une requête en syntaxe expert EUR-Lex (DN, FM, DTS_SUBDOM, TI...) et renvoie une liste normalisée de documents (CELEX, titre, type, date, langue).",
+    args: [
+      {
+        name: "query",
+        type: "string, requis",
+        desc: "Expression EUR-Lex, ex. DN = 32016R0679 ou FM = REG AND DTS_SUBDOM = LEGISLATION"
+      },
+      { name: "page", type: "number", desc: "Pagination (défaut 1)" },
+      { name: "page_size", type: "number", desc: "Taille de page, plafond configurable (<= 100)" },
+      { name: "lang", type: "string", desc: "Langue de retour (défaut FR)" }
+    ],
+    sample: {
+      input: "DN = 32016R0679",
+      output: {
+        ok: true,
+        data: {
+          total: 1,
+          page: 1,
+          results: [
+            {
+              celex: "32016R0679",
+              title: "Règlement (UE) 2016/679 - protection des données personnelles (RGPD)",
+              type: "Règlement",
+              date: "2016-04-27",
+              lang: "FR"
+            }
+          ]
+        },
+        error: null
+      }
+    }
+  },
+  {
+    id: "get_document_by_celex",
+    name: "get_document_by_celex",
+    blurb: "Métadonnées d'un document par identifiant CELEX.",
+    description:
+      "Renvoie les métadonnées d'un document juridique européen identifié de façon stable par son CELEX : titre, type, dates, auteur, classifications EuroVoc.",
+    args: [
+      { name: "celex", type: "string, requis", desc: "Identifiant CELEX, ex. 32016R0679" },
+      { name: "lang", type: "string", desc: "Langue (défaut FR)" }
+    ],
+    sample: {
+      input: '{ "celex": "32016R0679" }',
+      output: {
+        ok: true,
+        data: {
+          celex: "32016R0679",
+          title: "Règlement général sur la protection des données",
+          author: "Parlement européen, Conseil de l'Union européenne",
+          adopted: "2016-04-27",
+          in_force: true,
+          eurovoc: ["protection des données", "vie privée", "marché intérieur"]
+        },
+        error: null
+      }
+    }
+  },
+  {
+    id: "get_legal_text",
+    name: "get_legal_text",
+    blurb: "Texte intégral, considérants ou article unique.",
+    description:
+      "Récupère le texte d'un document : article par article, considérants seuls, ou texte complet. Idéal pour citer ou ancrer une analyse sur un passage exact, en français par défaut.",
+    args: [
+      { name: "celex", type: "string, requis", desc: "Identifiant CELEX du document" },
+      { name: "mode", type: "enum", desc: "article | recitals | full" },
+      { name: "article", type: "string", desc: 'Numéro d\'article, ex. "6" ou "6.1.f"' },
+      { name: "lang", type: "string", desc: "Langue de retour (défaut FR)" }
+    ],
+    sample: {
+      input: '{ "celex": "32016R0679", "mode": "article", "article": "6" }',
+      output: {
+        ok: true,
+        data: {
+          celex: "32016R0679",
+          article: "Article 6 - Licéité du traitement",
+          paragraphs: [
+            "1. Le traitement n'est licite que si, et dans la mesure où, au moins une des conditions suivantes est remplie :",
+            "  a) la personne concernée a consenti au traitement...",
+            "  b) le traitement est nécessaire à l'exécution d'un contrat..."
+          ]
+        },
+        error: null
+      }
+    }
+  },
+  {
+    id: "get_document_toc",
+    name: "get_document_toc",
+    blurb: "Table des matières : chapitres, sections, articles.",
+    description:
+      "Renvoie la table des matières structurée d'un document EUR-Lex (parties, titres, chapitres, sections, articles) avec numérotation et intitulés. Permet à Claude de naviguer un texte long avant d'aller chercher un article précis.",
+    args: [
+      { name: "celex", type: "string, requis", desc: "Identifiant CELEX" },
+      { name: "lang", type: "string", desc: "Langue (défaut FR)" }
+    ],
+    sample: {
+      input: '{ "celex": "32016R0679" }',
+      output: {
+        ok: true,
+        data: {
+          celex: "32016R0679",
+          toc: [
+            { level: "Chapitre I", title: "Dispositions générales", articles: ["1", "2", "3", "4"] },
+            { level: "Chapitre II", title: "Principes", articles: ["5", "6", "7", "8", "9", "10", "11"] },
+            { level: "Chapitre III", title: "Droits de la personne concernée", articles: ["12", "-", "23"] }
+          ]
+        },
+        error: null
+      }
+    }
+  }
+];
+
+const steps = [
+  {
+    n: "01",
+    title: "S'identifier",
+    body: "Connectez-vous avec un compte Google autorisé. L'accès est restreint via une allowlist d'emails ou un domaine de confiance.",
+    extra: "Better Auth - Google OAuth - OIDC"
+  },
+  {
+    n: "02",
+    title: "Brancher Claude",
+    body: "Ajoutez le serveur MCP distant dans Claude (web ou desktop). L'autorisation OAuth + PKCE se fait en deux clics, sans clé API à manipuler.",
+    extra: "https://mcp.laugier.xyz/mcp"
+  },
+  {
+    n: "03",
+    title: "Interroger en langage naturel",
+    body: "Posez vos questions juridiques à Claude. Il choisit l'outil adapté, ramène un payload structuré et cite directement les sources EUR-Lex.",
+    extra: "50 appels / 5 min par utilisateur"
+  }
+];
+
+const useCases = [
+  {
+    tag: "RGPD",
+    title: "Citer l'article 6 du RGPD avec le texte exact",
+    body: "Plus besoin de copier-coller depuis EUR-Lex. Claude récupère l'article, le considérant pertinent et le contexte du chapitre - tout en français, en une seule réponse.",
+    prompt: "Donne-moi la base légale du consentement RGPD, article par article, avec les considérants associés."
+  },
+  {
+    tag: "Veille",
+    title: "Suivre une directive en cours de transposition",
+    body: "Pose une question en langage naturel ; Claude exécute une recherche experte, ramène les actes liés et les amendements, puis te livre une note de synthèse sourcée.",
+    prompt: "Liste les directives sur la cybersécurité adoptées depuis 2022, avec CELEX et date d'entrée en vigueur."
+  },
+  {
+    tag: "Fiscalité",
+    title: "Comparer deux versions d'un règlement",
+    body: "Récupère la table des matières des deux versions, repère les articles modifiés, puis demande le texte complet uniquement là où ça change.",
+    prompt: "Compare la structure du règlement 2017/1129 avant et après la modification de 2024."
+  },
+  {
+    tag: "Jurisprudence",
+    title: "Préparer une note pour un client",
+    body: "Brief d'audience, mémo, consultation : enchaîne recherche experte, lecture d'article, et synthèse - sans quitter Claude, et sans hallucination de référence.",
+    prompt: "Rédige une note sur l'article 17 du DSA et cite les considérants pertinents."
+  }
+];
+
+const formatJson = (value: unknown) => (typeof value === "string" ? value : JSON.stringify(value, null, 2));
+---
+
+<!doctype html>
+<html lang="fr" data-theme="light" data-palette="ue" data-typo="default">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta
+      name="description"
+      content="Eur-Lex MCP branche Claude et tout client compatible MCP directement sur la base juridique EUR-Lex."
+    />
+    <meta name="generator" content={Astro.generator} />
+    <title>Eur-Lex MCP - La législation européenne, intégrée à votre IA</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Source+Serif+4:ital,wght@0,400;0,500;0,600;0,700;1,400&family=Fraunces:ital,wght@0,400;0,500;0,600;0,700;1,400&family=JetBrains+Mono:wght@400;500;600&display=swap"
+      rel="stylesheet"
+    />
+  </head>
+  <body>
+    <header class="nav">
+      <div class="container nav-inner">
+        <a class="brand" href="#top" aria-label="Eur-Lex MCP">
+          <span class="brand-mark" aria-hidden="true"></span>
+          <span class="brand-name">Eur-Lex</span>
+          <span class="brand-tag">MCP</span>
+        </a>
+        <nav class="nav-links" aria-label="Navigation principale">
+          <a href="#tools">Outils</a>
+          <a href="#how">Comment ça marche</a>
+          <a href="#cases">Cas d'usage</a>
+        </nav>
+        <div class="nav-cta">
+          <button class="icon-btn theme-toggle" type="button" aria-label="Basculer theme clair / sombre" title="Theme">
+            <svg class="icon-moon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79Z" stroke-linejoin="round"></path>
+            </svg>
+            <svg class="icon-sun" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <circle cx="12" cy="12" r="4"></circle>
+              <path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41" stroke-linecap="round"></path>
+            </svg>
+          </button>
+          <a class="btn btn-sm btn-ghost" href="https://mcp.laugier.xyz" rel="noreferrer">Se connecter</a>
+          <a class="btn btn-sm btn-primary" href="https://claude.ai/" target="_blank" rel="noreferrer">
+            Connecter à Claude
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" aria-hidden="true">
+              <path d="M5 12h14M13 5l7 7-7 7" stroke-linecap="round" stroke-linejoin="round"></path>
+            </svg>
+          </a>
+        </div>
+      </div>
+    </header>
+
+    <main>
+      <section class="hero" id="top">
+        <div class="container hero-grid">
+          <div>
+            <span class="hero-eyebrow fadein">
+              <span class="pulse" aria-hidden="true"></span>
+              Disponible - mcp.laugier.xyz
+            </span>
+            <h1 class="hero-title fadein delay-1">
+              La législation <em>européenne</em>,<br />
+              <span class="accent-bar" aria-hidden="true"></span>intégrée à votre IA.
+            </h1>
+            <p class="hero-sub fadein delay-2">
+              Eur-Lex MCP branche Claude - et tout client compatible Model Context Protocol - directement sur la base de données juridiques EUR-Lex. Recherche experte, articles, considérants, table des matières : sans copier-coller, sans hallucination de référence.
+            </p>
+            <div class="hero-cta fadein delay-3">
+              <a class="btn btn-primary btn-lg" href="https://claude.ai/" target="_blank" rel="noreferrer">
+                Connecter à Claude
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" aria-hidden="true">
+                  <path d="M5 12h14M13 5l7 7-7 7" stroke-linecap="round" stroke-linejoin="round"></path>
+                </svg>
+              </a>
+              <a class="btn btn-lg" href="https://mcp.laugier.xyz" rel="noreferrer">
+                <svg width="16" height="16" viewBox="0 0 24 24" aria-hidden="true">
+                  <path fill="currentColor" d="M21.6 12.23c0-.74-.07-1.45-.2-2.13H12v4.03h5.4a4.6 4.6 0 0 1-2 3.02v2.51h3.23c1.89-1.74 2.97-4.31 2.97-7.43Z"></path>
+                  <path fill="currentColor" d="M12 22c2.7 0 4.96-.9 6.62-2.43l-3.23-2.5c-.9.6-2.05.96-3.39.96-2.6 0-4.81-1.76-5.6-4.13H3.07v2.6A10 10 0 0 0 12 22Z" opacity=".85"></path>
+                  <path fill="currentColor" d="M6.4 13.9a6 6 0 0 1 0-3.8V7.5H3.07a10 10 0 0 0 0 9l3.33-2.6Z" opacity=".55"></path>
+                  <path fill="currentColor" d="M12 5.96c1.47 0 2.79.5 3.83 1.5l2.86-2.86A10 10 0 0 0 12 2 10 10 0 0 0 3.07 7.5L6.4 10.1c.79-2.37 3-4.14 5.6-4.14Z" opacity=".7"></path>
+                </svg>
+                Se connecter avec Google
+              </a>
+            </div>
+          </div>
+
+          <div class="fadein delay-2">
+            <div class="terminal terminal-hero" role="figure" aria-label="Demonstration du serveur MCP">
+              <div class="terminal-bar">
+                <div class="terminal-dots" aria-hidden="true"><span></span><span></span><span></span></div>
+              <div class="terminal-title">claude - mcp - eur-lex</div>
+                <div class="terminal-spacer" aria-hidden="true"></div>
+              </div>
+              <div class="terminal-tabs" role="tablist" aria-label="Exemples d'appels MCP">
+                <button class="terminal-tab is-active" type="button" role="tab" aria-selected="true" data-terminal-tab="0">expert_search</button>
+                <button class="terminal-tab" type="button" role="tab" aria-selected="false" data-terminal-tab="1">get_legal_text</button>
+                <button class="terminal-tab" type="button" role="tab" aria-selected="false" data-terminal-tab="2">get_document_toc</button>
+              </div>
+              <div class="terminal-body" id="hero-terminal-body" aria-live="polite">
+                <span class="line tok-comment">// Claude appelle l'outil expert_search via MCP</span>
+                <span class="line tok-prompt">-> tools/call expert_search</span>
+                <span class="line tok-str">{`{ "query": "DN = 32016R0679", "lang": "FR" }`}</span>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="stars-ring" aria-hidden="true"></div>
+      </section>
+
+      <section class="section" id="tools">
+        <div class="container">
+          <div class="section-head reveal">
+            <div>
+              <div class="section-num">01 - Outils</div>
+              <h2 class="section-title">Quatre outils, une seule promesse : pas d'invention.</h2>
+            </div>
+            <p class="right">
+              Chaque outil renvoie un payload stable <code>{`{ ok, data, error }`}</code>. Tous sont <strong>read-only</strong> - annotés <code>readOnlyHint: true</code>, <code>destructiveHint: false</code>. Claude ne peut rien modifier sur EUR-Lex.
+            </p>
+          </div>
+
+          <div class="tools reveal">
+            <div class="tools-list" role="tablist" aria-label="Outils MCP">
+              {
+                tools.map((tool, index) => (
+                  <button
+                    class={`tool-row${index === 0 ? " is-active" : ""}`}
+                    type="button"
+                    role="tab"
+                    aria-selected={index === 0 ? "true" : "false"}
+                    aria-controls={`panel-${tool.id}`}
+                    id={`tab-${tool.id}`}
+                    data-tool-tab={tool.id}
+                  >
+                    <span class="tool-name">{tool.name}</span>
+                    <span class="tool-blurb">{tool.blurb}</span>
+                  </button>
+                ))
+              }
+            </div>
+
+            <div class="tool-panels">
+              {
+                tools.map((tool, index) => (
+                  <div
+                    class={`tool-detail tool-panel${index === 0 ? " is-active" : ""}`}
+                    id={`panel-${tool.id}`}
+                    role="tabpanel"
+                    aria-labelledby={`tab-${tool.id}`}
+                    data-tool-panel={tool.id}
+                    hidden={index !== 0}
+                  >
+                    <div class="tool-detail-head">
+                      <h3>{tool.name}<span>()</span></h3>
+                      <div class="tool-pills">
+                        <span class="tool-pill is-ok">read-only</span>
+                        <span class="tool-pill">JSON - {`{ ok, data, error }`}</span>
+                      </div>
+                    </div>
+
+                    <p class="desc">{tool.description}</p>
+
+                    <div>
+                      <div class="section-num param-title">Paramètres</div>
+                      <div class="tool-args">
+                        {
+                          tool.args.map((arg) => (
+                            <div class="arg-row">
+                              <span>
+                                <span class="arg-name">{arg.name}</span>
+                                <span class="arg-type"> - {arg.type}</span>
+                              </span>
+                              <span class="arg-desc">{arg.desc}</span>
+                            </div>
+                          ))
+                        }
+                      </div>
+                    </div>
+
+                    <div class="terminal terminal-sample">
+                      <div class="terminal-bar">
+                        <div class="terminal-dots" aria-hidden="true"><span></span><span></span><span></span></div>
+                        <div class="terminal-title">{tool.name} - exemple</div>
+                        <div class="terminal-spacer" aria-hidden="true"></div>
+                      </div>
+                      <div class="terminal-body">
+                        <span class="line tok-comment">// requete</span>
+                        <span class="line tok-str">{tool.sample.input}</span>
+                        <span class="line tok-mute"></span>
+                        <span class="line tok-comment">// reponse</span>
+                        <span class="line tok-key"><code>{formatJson(tool.sample.output)}</code></span>
+                      </div>
+                    </div>
+                  </div>
+                ))
+              }
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="section" id="how">
+        <div class="container">
+          <div class="section-head reveal">
+            <div>
+              <div class="section-num">02 - Mise en route</div>
+              <h2 class="section-title">Trois étapes, pas de clé API à gérer.</h2>
+            </div>
+            <p class="right">
+              Le serveur tourne en Streamable HTTP sur Scaleway, derrière OAuth. Vos requêtes sont rate-limitées, journalisées de façon minimale, et n'écrivent jamais sur EUR-Lex.
+            </p>
+          </div>
+
+          <div class="steps">
+            {
+              steps.map((step, index) => (
+                <article class="step reveal" style={`transition-delay: ${index * 80}ms`}>
+                  <div class="step-num"><strong>{step.n}</strong>Étape</div>
+                  <h4>{step.title}</h4>
+                  <p>{step.body}</p>
+                  <div class="step-extra">{step.extra}</div>
+                </article>
+              ))
+            }
+          </div>
+        </div>
+      </section>
+
+      <section class="section" id="cases">
+        <div class="container">
+          <div class="section-head reveal">
+            <div>
+              <div class="section-num">03 - Cas d'usage</div>
+              <h2 class="section-title">Pour les juristes qui veulent du texte exact, pas un résumé approximatif.</h2>
+            </div>
+            <p class="right">
+              Eur-Lex MCP s'adresse aux avocats, fiscalistes, juristes d'entreprise et chercheurs qui travaillent sur le droit européen au quotidien - et qui ne peuvent pas se permettre une référence inventée.
+            </p>
+          </div>
+
+          <div class="cases">
+            {
+              useCases.map((useCase, index) => (
+                <article class="case reveal" style={`transition-delay: ${(index % 2) * 80}ms`}>
+                  <div class="case-tag">{useCase.tag}</div>
+                  <h4>{useCase.title}</h4>
+                  <p>{useCase.body}</p>
+                  <div class="case-prompt">"{useCase.prompt}"</div>
+                </article>
+              ))
+            }
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <footer class="footer">
+      <div class="container">
+        <div class="footer-grid">
+          <div>
+            <a class="brand" href="#top" aria-label="Eur-Lex MCP">
+              <span class="brand-mark" aria-hidden="true"></span>
+              <span class="brand-name">Eur-Lex</span>
+              <span class="brand-tag">MCP</span>
+            </a>
+            <p>
+              Serveur Model Context Protocol open-source pour interroger la base juridique EUR-Lex depuis Claude et tout client MCP compatible.
+            </p>
+          </div>
+          <div>
+            <h5>Mentions</h5>
+            <ul>
+              <li><a href="https://eur-lex.europa.eu/content/legal-notice/legal-notice.html" target="_blank" rel="noreferrer">Données EUR-Lex</a></li>
+              <li><a href="/privacy">Politique de confidentialité</a></li>
+            </ul>
+          </div>
+        </div>
+        <div class="footer-end">
+          <span>© 2026 Eur-Lex MCP - Service indépendant, non affilié à l'Office des publications de l'UE.</span>
+          <span class="status-pill"><span class="dot" aria-hidden="true"></span>Tous les services opérationnels</span>
+        </div>
+      </div>
+    </footer>
+
+    <script>
+      const root = document.documentElement;
+      const themeToggle = document.querySelector(".theme-toggle");
+
+      themeToggle?.addEventListener("click", () => {
+        const nextTheme = root.dataset.theme === "dark" ? "light" : "dark";
+        root.dataset.theme = nextTheme;
+      });
+
+      const revealItems = document.querySelectorAll(".reveal");
+      if (!("IntersectionObserver" in window)) {
+        revealItems.forEach((item) => item.classList.add("is-visible"));
+      } else {
+        const observer = new IntersectionObserver(
+          (entries) => {
+            entries.forEach((entry) => {
+              if (entry.isIntersecting) {
+                entry.target.classList.add("is-visible");
+                observer.unobserve(entry.target);
+              }
+            });
+          },
+          { threshold: 0.12, rootMargin: "0px 0px -40px 0px" }
+        );
+        revealItems.forEach((item) => observer.observe(item));
+      }
+
+      const toolTabs = Array.from(document.querySelectorAll("[data-tool-tab]"));
+      const toolPanels = Array.from(document.querySelectorAll("[data-tool-panel]"));
+      toolTabs.forEach((tab) => {
+        tab.addEventListener("click", () => {
+          const id = tab.getAttribute("data-tool-tab");
+          toolTabs.forEach((item) => {
+            const active = item === tab;
+            item.classList.toggle("is-active", active);
+            item.setAttribute("aria-selected", String(active));
+          });
+          toolPanels.forEach((panel) => {
+            const active = panel.getAttribute("data-tool-panel") === id;
+            panel.classList.toggle("is-active", active);
+            panel.toggleAttribute("hidden", !active);
+          });
+        });
+      });
+
+      type TerminalLine = {
+        t: "comment" | "prompt" | "json" | "wait" | "ok" | "out";
+        text: string;
+        ms?: number;
+      };
+
+      type TerminalSequence = {
+        label: string;
+        lines: TerminalLine[];
+      };
+
+      const sequences: TerminalSequence[] = [
+        {
+          label: "expert_search",
+          lines: [
+            { t: "comment", text: "// Claude appelle l'outil expert_search via MCP" },
+            { t: "prompt", text: "-> tools/call expert_search" },
+            { t: "json", text: '{ "query": "DN = 32016R0679", "lang": "FR" }' },
+            { t: "wait", ms: 600, text: "... requête EUR-Lex ..." },
+            { t: "ok", text: "✓ 200 OK - 1 résultat - 412 ms" },
+            {
+              t: "out",
+              text:
+                '{\n  "ok": true,\n  "data": {\n    "total": 1,\n    "results": [{\n      "celex": "32016R0679",\n      "title": "Règlement (UE) 2016/679 - RGPD",\n      "type": "Règlement",\n      "date": "2016-04-27"\n    }]\n  }\n}'
+            }
+          ]
+        },
+        {
+          label: "get_legal_text",
+          lines: [
+            { t: "comment", text: "// Récupération de l'article 6 du RGPD" },
+            { t: "prompt", text: "-> tools/call get_legal_text" },
+            { t: "json", text: '{ "celex": "32016R0679", "mode": "article", "article": "6" }' },
+            { t: "wait", ms: 600, text: "... récupération du texte intégral ..." },
+            { t: "ok", text: "✓ 200 OK - 1 article - 318 ms" },
+            {
+              t: "out",
+              text:
+                '{\n  "article": "Article 6 - Licéité du traitement",\n  "paragraphs": [\n    "1. Le traitement n\'est licite que si...",\n    "  a) la personne concernée a consenti...",\n    "  b) le traitement est nécessaire..."\n  ]\n}'
+            }
+          ]
+        },
+        {
+          label: "get_document_toc",
+          lines: [
+            { t: "comment", text: "// Table des matières du DSA" },
+            { t: "prompt", text: "-> tools/call get_document_toc" },
+            { t: "json", text: '{ "celex": "32022R2065" }' },
+            { t: "wait", ms: 500, text: "... extraction TOC ..." },
+            { t: "ok", text: "✓ 200 OK - 5 chapitres - 287 ms" },
+            {
+              t: "out",
+              text:
+                '[\n  "Ch. I - Dispositions générales",\n  "Ch. II - Responsabilité des prestataires",\n  "Ch. III - Diligence raisonnable",\n  "Ch. IV - Mise en oeuvre...",\n  "Ch. V - Dispositions finales"\n]'
+            }
+          ]
+        }
+      ];
+
+      const terminalBody = document.querySelector<HTMLElement>("#hero-terminal-body");
+      const terminalTabs = Array.from(document.querySelectorAll<HTMLButtonElement>("[data-terminal-tab]"));
+      const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+      let runId = 0;
+      let activeSequence = 0;
+
+      const lineClass = (type: TerminalLine["t"]) => {
+        if (type === "comment") return "tok-comment";
+        if (type === "prompt") return "tok-prompt";
+        if (type === "json") return "tok-str";
+        if (type === "wait") return "tok-mute";
+        if (type === "ok") return "tok-ok";
+        if (type === "out") return "tok-key";
+        return "";
+      };
+
+      const sleep = (ms: number) => new Promise((resolve) => window.setTimeout(resolve, ms));
+
+      const renderLine = (line: TerminalLine) => {
+        const span = document.createElement("span");
+        span.className = `line ${lineClass(line.t)}`;
+        span.textContent = line.text;
+        terminalBody?.append(span);
+        return span;
+      };
+
+      const updateTerminalTabs = (index: number) => {
+        terminalTabs.forEach((tab) => {
+          const active = tab.getAttribute("data-terminal-tab") === String(index);
+          tab.classList.toggle("is-active", active);
+          tab.setAttribute("aria-selected", String(active));
+        });
+      };
+
+      const renderStaticSequence = (index: number) => {
+        if (!terminalBody) return;
+        terminalBody.replaceChildren();
+        sequences[index].lines.forEach(renderLine);
+      };
+
+      const runSequence = async (index: number) => {
+        if (!terminalBody) return;
+        const currentRun = ++runId;
+        activeSequence = index;
+        updateTerminalTabs(index);
+        terminalBody.replaceChildren();
+
+        if (reducedMotion) {
+          renderStaticSequence(index);
+          return;
+        }
+
+        for (const line of sequences[index].lines) {
+          if (currentRun !== runId) return;
+
+          if (line.t === "wait") {
+            renderLine(line);
+            await sleep(line.ms ?? 400);
+            continue;
+          }
+
+          const span = document.createElement("span");
+          span.className = `line ${lineClass(line.t)}`;
+          const cursor = document.createElement("span");
+          cursor.className = "cursor";
+          terminalBody.append(span);
+
+          for (let char = 0; char <= line.text.length; char += 1) {
+            if (currentRun !== runId) return;
+            span.textContent = line.text.slice(0, char);
+            span.append(cursor);
+            await sleep(6 + Math.random() * 8);
+          }
+
+          cursor.remove();
+          span.textContent = line.text;
+          await sleep(line.t === "out" ? 1400 : 240);
+        }
+
+        await sleep(2200);
+        if (currentRun === runId) {
+          runSequence((index + 1) % sequences.length);
+        }
+      };
+
+      terminalTabs.forEach((tab) => {
+        tab.addEventListener("click", () => {
+          const index = Number(tab.getAttribute("data-terminal-tab") ?? activeSequence);
+          runSequence(index);
+        });
+      });
+
+      runSequence(0);
+    </script>
+  </body>
+</html>
+
+<style>
+  :root {
+    --bg: #fbfaf7;
+    --bg-soft: #f3f1ea;
+    --bg-elev: #ffffff;
+    --ink: #0f1115;
+    --ink-2: #2a2d34;
+    --ink-3: #5b6070;
+    --ink-4: #8a8f9c;
+    --line: rgba(15, 17, 21, 0.1);
+    --line-2: rgba(15, 17, 21, 0.06);
+    --brand: #003399;
+    --brand-ink: #00214d;
+    --accent: #ffcc00;
+    --code-bg: #0c1220;
+    --code-ink: #e6ecff;
+    --code-mute: #7a89b8;
+    --code-key: #ffd866;
+    --code-str: #a5d6ff;
+    --code-tag: #c4b5fd;
+    --code-ok: #7ee2b8;
+    --font-display: "Source Serif 4", "Fraunces", Georgia, serif;
+    --font-ui: "Inter", system-ui, -apple-system, "Helvetica Neue", Arial, sans-serif;
+    --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+    --radius: 10px;
+    --radius-sm: 6px;
+    --radius-lg: 18px;
+    --maxw: 1180px;
+    color-scheme: light;
+  }
+
+  [data-theme="dark"] {
+    --bg: #0b0d12;
+    --bg-soft: #11141b;
+    --bg-elev: #14181f;
+    --ink: #f3f4f7;
+    --ink-2: #d6d8df;
+    --ink-3: #9aa0ad;
+    --ink-4: #6b7280;
+    --line: rgba(255, 255, 255, 0.1);
+    --line-2: rgba(255, 255, 255, 0.06);
+    --brand: #6c93ff;
+    --brand-ink: #b9cbff;
+    --accent: #ffd84d;
+    --code-bg: #060912;
+    color-scheme: dark;
+  }
+
+  [data-palette="terminal"] {
+    --bg: #06080d;
+    --bg-soft: #0a0d14;
+    --bg-elev: #0d121b;
+    --ink: #d8e4f5;
+    --ink-2: #b9c5da;
+    --ink-3: #7e8aa2;
+    --ink-4: #5b667e;
+    --line: rgba(216, 228, 245, 0.1);
+    --brand: #5eead4;
+    --brand-ink: #99f6e4;
+    --accent: #fbbf24;
+    --code-bg: #03050a;
+    --font-display: "JetBrains Mono", ui-monospace, monospace;
+  }
+
+  [data-typo="editorial"] {
+    --font-display: "Fraunces", "Source Serif 4", Georgia, serif;
+    --font-ui: "Source Serif 4", Georgia, serif;
+  }
+
+  [data-typo="sans"] {
+    --font-display: "Inter", system-ui, sans-serif;
+    --font-ui: "Inter", system-ui, sans-serif;
+  }
+
+  [data-typo="mono"] {
+    --font-display: "JetBrains Mono", monospace;
+    --font-ui: "JetBrains Mono", monospace;
+  }
+
+  * {
+    box-sizing: border-box;
+  }
+
+  html,
+  body {
+    margin: 0;
+    padding: 0;
+    scroll-behavior: smooth;
+  }
+
+  body {
+    min-width: 320px;
+    overflow-x: hidden;
+    font-family: var(--font-ui);
+    background: var(--bg);
+    color: var(--ink);
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+    font-feature-settings: "ss01", "cv11";
+    line-height: 1.5;
+  }
+
+  a {
+    color: inherit;
+    text-decoration: none;
+  }
+
+  button {
+    font: inherit;
+  }
+
+  code {
+    font-family: var(--font-mono);
+    font-size: 0.92em;
+  }
+
+  .container {
+    max-width: var(--maxw);
+    margin: 0 auto;
+    padding: 0 32px;
+  }
+
+  .nav {
+    position: sticky;
+    top: 0;
+    z-index: 50;
+    backdrop-filter: saturate(140%) blur(14px);
+    -webkit-backdrop-filter: saturate(140%) blur(14px);
+    background: color-mix(in oklab, var(--bg) 78%, transparent);
+    border-bottom: 1px solid var(--line);
+  }
+
+  .nav-inner {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    height: 64px;
+    gap: 18px;
+  }
+
+  .brand {
+    display: inline-flex;
+    align-items: center;
+    gap: 10px;
+    flex: 0 0 auto;
+    font-family: var(--font-display);
+    font-size: 18px;
+    font-weight: 600;
+    letter-spacing: 0;
+  }
+
+  .brand-mark {
+    width: 26px;
+    height: 26px;
+    border-radius: 50%;
+    background: var(--brand);
+    display: grid;
+    place-items: center;
+    position: relative;
+  }
+
+  .brand-mark::after {
+    content: "";
+    width: 9px;
+    height: 9px;
+    border-radius: 50%;
+    border: 1px solid var(--accent);
+  }
+
+  .brand-name {
+    color: var(--ink);
+  }
+
+  .brand-tag {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--ink-3);
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+  }
+
+  .nav-links {
+    display: flex;
+    align-items: center;
+    gap: 26px;
+    font-size: 14px;
+    color: var(--ink-2);
+  }
+
+  .nav-links a:hover {
+    color: var(--ink);
+  }
+
+  .nav-cta {
+    display: flex;
+    gap: 10px;
+    align-items: center;
+  }
+
+  .btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    height: 38px;
+    padding: 0 16px;
+    border-radius: var(--radius);
+    font-size: 14px;
+    font-weight: 500;
+    border: 1px solid var(--line);
+    background: var(--bg-elev);
+    color: var(--ink);
+    cursor: pointer;
+    transition: transform 160ms ease, border-color 160ms ease, background 160ms ease;
+    white-space: nowrap;
+  }
+
+  .btn:hover {
+    border-color: color-mix(in oklab, var(--ink) 25%, transparent);
+    transform: translateY(-1px);
+  }
+
+  .btn-primary {
+    background: var(--brand);
+    color: #fff;
+    border-color: var(--brand);
+  }
+
+  .btn-primary:hover {
+    background: color-mix(in oklab, var(--brand) 88%, black);
+    border-color: color-mix(in oklab, var(--brand) 88%, black);
+  }
+
+  .btn-ghost {
+    background: transparent;
+  }
+
+  .btn-sm {
+    height: 32px;
+    padding: 0 12px;
+    font-size: 13px;
+  }
+
+  .btn-lg {
+    height: 46px;
+    padding: 0 22px;
+    font-size: 15px;
+  }
+
+  .icon-btn {
+    width: 38px;
+    height: 38px;
+    display: inline-grid;
+    place-items: center;
+    border-radius: var(--radius);
+    border: 1px solid var(--line);
+    background: var(--bg-elev);
+    color: var(--ink-2);
+    cursor: pointer;
+  }
+
+  .icon-btn:hover {
+    color: var(--ink);
+  }
+
+  .icon-sun {
+    display: none;
+  }
+
+  [data-theme="dark"] .icon-moon {
+    display: none;
+  }
+
+  [data-theme="dark"] .icon-sun {
+    display: block;
+  }
+
+  .hero {
+    padding: 96px 0 60px;
+    position: relative;
+    overflow: hidden;
+  }
+
+  .hero::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background-image:
+      linear-gradient(var(--line-2) 1px, transparent 1px),
+      linear-gradient(90deg, var(--line-2) 1px, transparent 1px);
+    background-size: 56px 56px;
+    background-position: -1px -1px;
+    -webkit-mask-image: radial-gradient(ellipse at 70% 40%, black 30%, transparent 75%);
+    mask-image: radial-gradient(ellipse at 70% 40%, black 30%, transparent 75%);
+    pointer-events: none;
+    z-index: 0;
+  }
+
+  .hero > .container {
+    position: relative;
+    z-index: 1;
+  }
+
+  .hero-grid {
+    display: grid;
+    grid-template-columns: 1.05fr 1fr;
+    gap: 64px;
+    align-items: center;
+  }
+
+  .hero-eyebrow {
+    display: inline-flex;
+    align-items: center;
+    gap: 10px;
+    font-family: var(--font-mono);
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    color: var(--ink-3);
+    margin-bottom: 28px;
+    padding: 6px 12px;
+    border: 1px solid var(--line);
+    border-radius: 999px;
+    background: var(--bg-elev);
+  }
+
+  .pulse {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: #22c55e;
+    box-shadow: 0 0 0 0 #22c55e80;
+    animation: pulse 1.8s infinite;
+  }
+
+  @keyframes pulse {
+    0% {
+      box-shadow: 0 0 0 0 #22c55e80;
+    }
+    70% {
+      box-shadow: 0 0 0 8px transparent;
+    }
+    100% {
+      box-shadow: 0 0 0 0 transparent;
+    }
+  }
+
+  .hero-title {
+    font-family: var(--font-display);
+    font-weight: 500;
+    font-size: clamp(40px, 6.6vw, 84px);
+    line-height: 1.02;
+    letter-spacing: 0;
+    margin: 0 0 28px;
+    max-width: 18ch;
+    text-wrap: balance;
+  }
+
+  .hero-title em {
+    font-style: italic;
+    font-weight: 400;
+    color: var(--brand-ink);
+  }
+
+  [data-palette="terminal"] .hero-title em {
+    color: var(--brand);
+  }
+
+  .accent-bar {
+    display: inline-block;
+    width: 0.5em;
+    height: 0.12em;
+    background: var(--accent);
+    vertical-align: 0.18em;
+    margin-right: 0.18em;
+  }
+
+  .hero-sub {
+    font-size: 19px;
+    line-height: 1.55;
+    color: var(--ink-3);
+    max-width: 60ch;
+    margin: 0 0 36px;
+    text-wrap: pretty;
+  }
+
+  .hero-cta {
+    display: flex;
+    gap: 12px;
+    align-items: center;
+    flex-wrap: wrap;
+  }
+
+  .terminal {
+    background: var(--code-bg);
+    border-radius: var(--radius-lg);
+    border: 1px solid color-mix(in oklab, var(--code-bg) 60%, white 8%);
+    box-shadow:
+      0 1px 0 rgba(255, 255, 255, 0.04) inset,
+      0 30px 60px -20px rgba(0, 0, 0, 0.35),
+      0 8px 18px -8px rgba(0, 51, 153, 0.2);
+    color: var(--code-ink);
+    font-family: var(--font-mono);
+    font-size: 13px;
+    line-height: 1.65;
+    overflow: hidden;
+  }
+
+  .terminal-bar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 12px 16px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+    background: linear-gradient(180deg, rgba(255, 255, 255, 0.03), transparent);
+  }
+
+  .terminal-dots {
+    display: flex;
+    gap: 6px;
+  }
+
+  .terminal-dots span {
+    width: 11px;
+    height: 11px;
+    border-radius: 50%;
+    background: #2c3245;
+  }
+
+  .terminal-title {
+    color: var(--code-mute);
+    font-size: 11px;
+    letter-spacing: 0.04em;
+  }
+
+  .terminal-spacer {
+    width: 36px;
+  }
+
+  .terminal-body {
+    padding: 18px 22px 22px;
+    min-height: 320px;
+  }
+
+  .terminal-hero .terminal-body {
+    min-height: 360px;
+  }
+
+  .terminal-sample {
+    margin-top: 8px;
+  }
+
+  .terminal-sample .terminal-body {
+    max-height: 470px;
+    overflow: auto;
+  }
+
+  .line {
+    display: block;
+    white-space: pre-wrap;
+  }
+
+  .line code {
+    color: inherit;
+    font: inherit;
+  }
+
+  .tok-comment {
+    color: #6b7894;
+    font-style: italic;
+  }
+
+  .tok-prompt {
+    color: #5eead4;
+    user-select: none;
+  }
+
+  .tok-key {
+    color: var(--code-key);
+  }
+
+  .tok-str {
+    color: var(--code-str);
+  }
+
+  .tok-ok {
+    color: var(--code-ok);
+  }
+
+  .tok-mute {
+    color: var(--code-mute);
+  }
+
+  .cursor {
+    display: inline-block;
+    width: 8px;
+    height: 1.05em;
+    background: var(--code-key);
+    vertical-align: -2px;
+    margin-left: 2px;
+    animation: blink 1s steps(1) infinite;
+  }
+
+  @keyframes blink {
+    50% {
+      opacity: 0;
+    }
+  }
+
+  .terminal-tabs {
+    display: flex;
+    gap: 2px;
+    padding: 0 10px;
+    background: rgba(255, 255, 255, 0.02);
+    border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+    overflow-x: auto;
+  }
+
+  .terminal-tab {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    letter-spacing: 0.04em;
+    color: var(--code-mute);
+    padding: 10px 14px;
+    border: none;
+    background: transparent;
+    cursor: pointer;
+    border-bottom: 1px solid transparent;
+    margin-bottom: -1px;
+    white-space: nowrap;
+  }
+
+  .terminal-tab:hover {
+    color: var(--code-ink);
+  }
+
+  .terminal-tab.is-active {
+    color: var(--code-ink);
+    border-bottom-color: var(--code-key);
+  }
+
+  .section {
+    padding: 96px 0;
+    border-top: 1px solid var(--line);
+  }
+
+  .section-num {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    color: var(--ink-4);
+    margin-bottom: 14px;
+  }
+
+  .section-title {
+    font-family: var(--font-display);
+    font-size: clamp(30px, 4vw, 48px);
+    letter-spacing: 0;
+    font-weight: 500;
+    line-height: 1.05;
+    margin: 0 0 16px;
+    text-wrap: balance;
+    max-width: 22ch;
+  }
+
+  .section-head {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 40px;
+    margin-bottom: 56px;
+    align-items: end;
+  }
+
+  .section-head .right {
+    color: var(--ink-3);
+    max-width: 48ch;
+    font-size: 15px;
+  }
+
+  .section-head code {
+    color: var(--ink);
+  }
+
+  .tools {
+    display: grid;
+    grid-template-columns: 320px 1fr;
+    gap: 0;
+    border: 1px solid var(--line);
+    border-radius: var(--radius-lg);
+    background: var(--bg-elev);
+    overflow: hidden;
+  }
+
+  .tools-list {
+    border-right: 1px solid var(--line);
+    background: var(--bg-soft);
+  }
+
+  .tool-row {
+    width: 100%;
+    text-align: left;
+    border: none;
+    background: transparent;
+    padding: 22px 26px;
+    border-bottom: 1px solid var(--line-2);
+    cursor: pointer;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    position: relative;
+    transition: background 160ms;
+  }
+
+  .tool-row:last-child {
+    border-bottom: none;
+  }
+
+  .tool-row:hover {
+    background: color-mix(in oklab, var(--brand) 4%, var(--bg-soft));
+  }
+
+  .tool-row.is-active {
+    background: var(--bg-elev);
+  }
+
+  .tool-row.is-active::before {
+    content: "";
+    position: absolute;
+    left: 0;
+    top: 0;
+    bottom: 0;
+    width: 3px;
+    background: var(--brand);
+  }
+
+  .tool-name {
+    font-family: var(--font-mono);
+    font-size: 14px;
+    font-weight: 500;
+    color: var(--ink);
+    letter-spacing: 0;
+  }
+
+  .tool-blurb {
+    font-size: 13px;
+    color: var(--ink-3);
+    line-height: 1.45;
+  }
+
+  .tool-panels {
+    min-width: 0;
+  }
+
+  .tool-detail {
+    padding: 32px 36px 36px;
+    display: flex;
+    flex-direction: column;
+    gap: 24px;
+    min-height: 460px;
+  }
+
+  .tool-detail[hidden] {
+    display: none;
+  }
+
+  .tool-detail-head {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 16px;
+    flex-wrap: wrap;
+  }
+
+  .tool-detail h3 {
+    font-family: var(--font-mono);
+    font-size: 22px;
+    margin: 0;
+    letter-spacing: 0;
+    font-weight: 500;
+  }
+
+  .tool-detail h3 span {
+    color: var(--ink-4);
+  }
+
+  .tool-pills {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+
+  .tool-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    font-family: var(--font-mono);
+    font-size: 11px;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--ink-3);
+    padding: 4px 10px;
+    border-radius: 999px;
+    border: 1px solid var(--line);
+    background: var(--bg-soft);
+  }
+
+  .tool-pill.is-ok {
+    color: #15803d;
+    border-color: rgba(34, 197, 94, 0.3);
+  }
+
+  [data-theme="dark"] .tool-pill.is-ok {
+    color: #4ade80;
+  }
+
+  .desc {
+    color: var(--ink-2);
+    font-size: 16px;
+    line-height: 1.6;
+    max-width: 64ch;
+    margin: 0;
+  }
+
+  .param-title {
+    margin-bottom: 12px;
+  }
+
+  .tool-args {
+    display: grid;
+    grid-template-columns: max-content 1fr;
+    column-gap: 20px;
+    row-gap: 8px;
+    font-family: var(--font-mono);
+    font-size: 13px;
+  }
+
+  .arg-row {
+    display: contents;
+  }
+
+  .arg-name {
+    color: var(--ink);
+    font-weight: 500;
+  }
+
+  .arg-type {
+    color: var(--ink-4);
+    font-size: 12px;
+  }
+
+  .arg-desc {
+    color: var(--ink-3);
+    font-family: var(--font-ui);
+    font-size: 14px;
+  }
+
+  .steps {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 24px;
+    counter-reset: step;
+  }
+
+  .step {
+    border: 1px solid var(--line);
+    background: var(--bg-elev);
+    border-radius: var(--radius-lg);
+    padding: 28px;
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    min-height: 220px;
+  }
+
+  .step-num {
+    font-family: var(--font-mono);
+    font-size: 12px;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--ink-4);
+  }
+
+  .step-num strong {
+    color: var(--brand);
+    font-weight: 500;
+    margin-right: 8px;
+  }
+
+  .step h4,
+  .case h4 {
+    font-family: var(--font-display);
+    font-weight: 500;
+    margin: 0;
+    letter-spacing: 0;
+    text-wrap: balance;
+  }
+
+  .step h4 {
+    font-size: 22px;
+  }
+
+  .step p {
+    color: var(--ink-3);
+    font-size: 14.5px;
+    line-height: 1.55;
+    margin: 0;
+  }
+
+  .step-extra {
+    margin-top: auto;
+    font-family: var(--font-mono);
+    font-size: 12px;
+    color: var(--ink-3);
+    padding: 10px 12px;
+    background: var(--bg-soft);
+    border-radius: 8px;
+    border: 1px solid var(--line-2);
+    overflow-wrap: anywhere;
+  }
+
+  .cases {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 1px;
+    background: var(--line);
+    border: 1px solid var(--line);
+    border-radius: var(--radius-lg);
+    overflow: hidden;
+  }
+
+  .case {
+    background: var(--bg-elev);
+    padding: 32px 32px 36px;
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    min-height: 240px;
+  }
+
+  .case-tag {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--brand);
+  }
+
+  .case h4 {
+    font-size: 24px;
+  }
+
+  .case p {
+    color: var(--ink-3);
+    margin: 0;
+    font-size: 15px;
+    line-height: 1.55;
+    text-wrap: pretty;
+  }
+
+  .case-prompt {
+    margin-top: auto;
+    font-family: var(--font-mono);
+    font-size: 12.5px;
+    color: var(--ink-2);
+    padding: 12px 14px;
+    background: var(--bg-soft);
+    border-left: 2px solid var(--brand);
+    border-radius: 0 6px 6px 0;
+  }
+
+  .footer {
+    padding: 64px 0 40px;
+    border-top: 1px solid var(--line);
+    background: var(--bg-soft);
+  }
+
+  .footer-grid {
+    display: grid;
+    grid-template-columns: 2fr 1fr;
+    gap: 80px;
+    margin-bottom: 48px;
+  }
+
+  .footer p {
+    color: var(--ink-3);
+    font-size: 14px;
+    margin: 14px 0 0;
+    max-width: 44ch;
+    line-height: 1.55;
+  }
+
+  .footer h5 {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    color: var(--ink-4);
+    margin: 0 0 14px;
+    font-weight: 500;
+  }
+
+  .footer ul {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    font-size: 14px;
+    color: var(--ink-2);
+  }
+
+  .footer ul a:hover {
+    color: var(--ink);
+  }
+
+  .footer-end {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding-top: 24px;
+    border-top: 1px solid var(--line);
+    font-size: 12.5px;
+    color: var(--ink-4);
+    flex-wrap: wrap;
+    gap: 16px;
+  }
+
+  .status-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    font-family: var(--font-mono);
+    font-size: 12px;
+  }
+
+  .status-pill .dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: #22c55e;
+    box-shadow: 0 0 0 3px rgba(34, 197, 94, 0.18);
+  }
+
+  .fadein {
+    opacity: 0;
+    transform: translateY(10px);
+    animation: fadein 700ms cubic-bezier(0.2, 0.8, 0.2, 1) forwards;
+  }
+
+  @keyframes fadein {
+    to {
+      opacity: 1;
+      transform: none;
+    }
+  }
+
+  .delay-1 {
+    animation-delay: 80ms;
+  }
+
+  .delay-2 {
+    animation-delay: 160ms;
+  }
+
+  .delay-3 {
+    animation-delay: 240ms;
+  }
+
+  .reveal {
+    opacity: 0;
+    transform: translateY(14px);
+    transition: opacity 700ms ease, transform 700ms cubic-bezier(0.2, 0.8, 0.2, 1);
+  }
+
+  .reveal.is-visible {
+    opacity: 1;
+    transform: none;
+  }
+
+  .stars-ring {
+    position: absolute;
+    width: 280px;
+    height: 280px;
+    border-radius: 50%;
+    border: 1px dashed color-mix(in oklab, var(--brand) 35%, transparent);
+    display: none;
+  }
+
+  @media (min-width: 1100px) {
+    .stars-ring {
+      display: block;
+      right: -120px;
+      top: -100px;
+      opacity: 0.5;
+    }
+  }
+
+  @media (max-width: 980px) {
+    .hero-grid {
+      grid-template-columns: 1fr;
+      gap: 48px;
+    }
+  }
+
+  @media (max-width: 880px) {
+    .tools {
+      grid-template-columns: 1fr;
+    }
+
+    .tools-list {
+      border-right: none;
+      border-bottom: 1px solid var(--line);
+      display: flex;
+      overflow-x: auto;
+    }
+
+    .tool-row {
+      min-width: 260px;
+      border-bottom: none;
+      border-right: 1px solid var(--line-2);
+    }
+
+    .tool-row.is-active::before {
+      top: auto;
+      right: 0;
+      width: auto;
+      height: 3px;
+    }
+
+    .steps {
+      grid-template-columns: 1fr;
+    }
+  }
+
+  @media (max-width: 820px) {
+    .section-head {
+      grid-template-columns: 1fr;
+      align-items: start;
+    }
+
+    .nav-links {
+      display: none;
+    }
+  }
+
+  @media (max-width: 760px) {
+    .footer-grid {
+      grid-template-columns: 1fr;
+      gap: 32px;
+    }
+  }
+
+  @media (max-width: 720px) {
+    .cases {
+      grid-template-columns: 1fr;
+    }
+  }
+
+  @media (max-width: 640px) {
+    .container {
+      padding: 0 20px;
+    }
+
+    .nav-inner {
+      height: auto;
+      min-height: 64px;
+      padding: 10px 20px;
+      flex-wrap: wrap;
+    }
+
+    .nav-cta {
+      width: 100%;
+      justify-content: space-between;
+    }
+
+    .nav-cta .btn {
+      flex: 1 1 auto;
+      min-width: 0;
+      padding: 0 10px;
+      font-size: 12px;
+    }
+
+    .hero {
+      padding: 64px 0 44px;
+    }
+
+    .hero-title {
+      font-size: clamp(40px, 14vw, 60px);
+    }
+
+    .hero-sub {
+      font-size: 16px;
+    }
+
+    .btn-lg {
+      width: 100%;
+    }
+
+    .terminal {
+      font-size: 11.5px;
+    }
+
+    .terminal-body {
+      padding: 16px;
+      min-height: 280px;
+    }
+
+    .section {
+      padding: 72px 0;
+    }
+
+    .tool-detail {
+      padding: 24px 20px 28px;
+    }
+
+    .tool-args {
+      display: block;
+    }
+
+    .arg-row {
+      display: grid;
+      gap: 3px;
+      padding: 9px 0;
+      border-bottom: 1px solid var(--line-2);
+    }
+
+    .case,
+    .step {
+      padding: 24px;
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation-duration: 1ms !important;
+      animation-iteration-count: 1 !important;
+      scroll-behavior: auto !important;
+      transition-duration: 1ms !important;
+    }
+  }
+</style>
