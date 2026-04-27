@@ -212,7 +212,7 @@ const formatJson = (value: unknown) => (typeof value === "string" ? value : JSON
               <path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41" stroke-linecap="round"></path>
             </svg>
           </button>
-          <a class="btn btn-sm btn-ghost" href="https://mcp.laugier.xyz" rel="noreferrer">Se connecter</a>
+          <a class="btn btn-sm btn-ghost" href="https://mcp.laugier.xyz/login" rel="noreferrer">Se connecter</a>
           <a class="btn btn-sm btn-primary" href="https://claude.ai/" target="_blank" rel="noreferrer">
             Connecter à Claude
             <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" aria-hidden="true">
@@ -261,7 +261,7 @@ const formatJson = (value: unknown) => (typeof value === "string" ? value : JSON
             <div class="terminal terminal-hero" role="figure" aria-label="Demonstration du serveur MCP">
               <div class="terminal-bar">
                 <div class="terminal-dots" aria-hidden="true"><span></span><span></span><span></span></div>
-              <div class="terminal-title">claude - mcp - eur-lex</div>
+                <div class="terminal-title">claude · mcp · eur-lex</div>
                 <div class="terminal-spacer" aria-hidden="true"></div>
               </div>
               <div class="terminal-tabs" role="tablist" aria-label="Exemples d'appels MCP">
@@ -271,7 +271,7 @@ const formatJson = (value: unknown) => (typeof value === "string" ? value : JSON
               </div>
               <div class="terminal-body" id="hero-terminal-body" aria-live="polite">
                 <span class="line tok-comment">// Claude appelle l'outil expert_search via MCP</span>
-                <span class="line tok-prompt">-> tools/call expert_search</span>
+                <span class="line tok-prompt">→ tools/call expert_search</span>
                 <span class="line tok-str">{`{ "query": "DN = 32016R0679", "lang": "FR" }`}</span>
               </div>
             </div>
@@ -516,44 +516,55 @@ const formatJson = (value: unknown) => (typeof value === "string" ? value : JSON
           label: "expert_search",
           lines: [
             { t: "comment", text: "// Claude appelle l'outil expert_search via MCP" },
-            { t: "prompt", text: "-> tools/call expert_search" },
-            { t: "json", text: '{ "query": "DN = 32016R0679", "lang": "FR" }' },
-            { t: "wait", ms: 600, text: "... requête EUR-Lex ..." },
-            { t: "ok", text: "✓ 200 OK - 1 résultat - 412 ms" },
+            { t: "prompt", text: "→ tools/call expert_search" },
+            { t: "json", text: '{ "query": "DN = 32016R0679", "language": "fr" }' },
+            { t: "wait", ms: 600, text: "… requête EUR-Lex …" },
+            { t: "ok", text: "✓ 200 OK · 1 résultat · 412 ms" },
             {
               t: "out",
               text:
-                '{\n  "ok": true,\n  "data": {\n    "total": 1,\n    "results": [{\n      "celex": "32016R0679",\n      "title": "Règlement (UE) 2016/679 - RGPD",\n      "type": "Règlement",\n      "date": "2016-04-27"\n    }]\n  }\n}'
+                '{\n  "ok": true,\n  "data": {\n    "total": 1,\n    "results": [\n      {\n        "celex": "32016R0679",\n        "title": "Règlement (UE) 2016/679 - RGPD",\n        "type": "Règlement",\n        "date": "2016-04-27"\n      }\n    ]\n  },\n  "error": null\n}'
             }
           ]
         },
         {
           label: "get_legal_text",
           lines: [
-            { t: "comment", text: "// Récupération de l'article 6 du RGPD" },
-            { t: "prompt", text: "-> tools/call get_legal_text" },
-            { t: "json", text: '{ "celex": "32016R0679", "mode": "article", "article": "6" }' },
-            { t: "wait", ms: 600, text: "... récupération du texte intégral ..." },
-            { t: "ok", text: "✓ 200 OK - 1 article - 318 ms" },
+            { t: "comment", text: "// Récupération de l'article 6 du RGPD (32016R0679)" },
+            { t: "prompt", text: "→ tools/call get_legal_text" },
+            { t: "json", text: '{ "celex": "32016R0679", "mode": "article", "article": "6", "language": "fr" }' },
+            { t: "wait", ms: 600, text: "… récupération du texte intégral …" },
+            { t: "ok", text: "✓ 200 OK · article 6 · français" },
             {
               t: "out",
-              text:
-                '{\n  "article": "Article 6 - Licéité du traitement",\n  "paragraphs": [\n    "1. Le traitement n\'est licite que si...",\n    "  a) la personne concernée a consenti...",\n    "  b) le traitement est nécessaire..."\n  ]\n}'
+              text: `{
+  "ok": true,
+  "data": {
+    "celex": "32016R0679",
+    "article": "Article 6 - Licéité du traitement",
+    "paragraphs": [
+      "1. Le traitement n'est licite que si...",
+      "a) la personne concernée a consenti...",
+      "b) le traitement est nécessaire..."
+    ]
+  },
+  "error": null
+}`
             }
           ]
         },
         {
           label: "get_document_toc",
           lines: [
-            { t: "comment", text: "// Table des matières du DSA" },
-            { t: "prompt", text: "-> tools/call get_document_toc" },
-            { t: "json", text: '{ "celex": "32022R2065" }' },
-            { t: "wait", ms: 500, text: "... extraction TOC ..." },
-            { t: "ok", text: "✓ 200 OK - 5 chapitres - 287 ms" },
+            { t: "comment", text: "// Table des matières du DSA (32022R2065)" },
+            { t: "prompt", text: "→ tools/call get_document_toc" },
+            { t: "json", text: '{ "celex": "32022R2065", "language": "fr" }' },
+            { t: "wait", ms: 500, text: "… extraction TOC …" },
+            { t: "ok", text: "✓ 200 OK · 93 articles · 5 chapitres" },
             {
               t: "out",
               text:
-                '[\n  "Ch. I - Dispositions générales",\n  "Ch. II - Responsabilité des prestataires",\n  "Ch. III - Diligence raisonnable",\n  "Ch. IV - Mise en oeuvre...",\n  "Ch. V - Dispositions finales"\n]'
+                '{\n  "ok": true,\n  "data": {\n    "celex": "32022R2065",\n    "toc": [\n      { "label": "CHAPITRE I",\n        "title": "DISPOSITIONS GÉNÉRALES" },\n      { "label": "CHAPITRE II",\n        "title": "RESPONSABILITÉ DES FOURNISSEURS" },\n      { "label": "CHAPITRE III",\n        "title": "OBLIGATIONS DE DILIGENCE" },\n      { "label": "CHAPITRE IV",\n        "title": "MISE EN ŒUVRE, COOPÉRATION" },\n      { "label": "CHAPITRE V",\n        "title": "DISPOSITIONS FINALES" }\n    ]\n  },\n  "error": null\n}'
             }
           ]
         }
@@ -1064,6 +1075,11 @@ const formatJson = (value: unknown) => (typeof value === "string" ? value : JSON
     overflow: hidden;
   }
 
+  .terminal-hero {
+    font-size: 14px;
+    line-height: 1.58;
+  }
+
   .terminal-bar {
     display: flex;
     align-items: center;
@@ -1101,6 +1117,7 @@ const formatJson = (value: unknown) => (typeof value === "string" ? value : JSON
   }
 
   .terminal-hero .terminal-body {
+    padding: 22px 24px 26px;
     min-height: 360px;
   }
 
@@ -1113,43 +1130,43 @@ const formatJson = (value: unknown) => (typeof value === "string" ? value : JSON
     overflow: auto;
   }
 
-  .line {
+  :global(.line) {
     display: block;
     white-space: pre-wrap;
   }
 
-  .line code {
+  :global(.line code) {
     color: inherit;
     font: inherit;
   }
 
-  .tok-comment {
+  :global(.tok-comment) {
     color: #6b7894;
     font-style: italic;
   }
 
-  .tok-prompt {
+  :global(.tok-prompt) {
     color: #5eead4;
     user-select: none;
   }
 
-  .tok-key {
+  :global(.tok-key) {
     color: var(--code-key);
   }
 
-  .tok-str {
+  :global(.tok-str) {
     color: var(--code-str);
   }
 
-  .tok-ok {
+  :global(.tok-ok) {
     color: var(--code-ok);
   }
 
-  .tok-mute {
+  :global(.tok-mute) {
     color: var(--code-mute);
   }
 
-  .cursor {
+  :global(.cursor) {
     display: inline-block;
     width: 8px;
     height: 1.05em;
@@ -1197,6 +1214,10 @@ const formatJson = (value: unknown) => (typeof value === "string" ? value : JSON
     border-bottom-color: var(--code-key);
   }
 
+  .terminal-hero .terminal-tab {
+    font-size: 13px;
+  }
+
   .section {
     padding: 96px 0;
     border-top: 1px solid var(--line);
@@ -1213,7 +1234,7 @@ const formatJson = (value: unknown) => (typeof value === "string" ? value : JSON
 
   .section-title {
     font-family: var(--font-display);
-    font-size: clamp(30px, 4vw, 48px);
+    font-size: 48px;
     letter-spacing: 0;
     font-weight: 500;
     line-height: 1.05;
@@ -1499,7 +1520,8 @@ const formatJson = (value: unknown) => (typeof value === "string" ? value : JSON
 
   .case-tag {
     font-family: var(--font-mono);
-    font-size: 11px;
+    font-size: 12px;
+    font-weight: 600;
     letter-spacing: 0.1em;
     text-transform: uppercase;
     color: var(--brand);
@@ -1757,13 +1779,22 @@ const formatJson = (value: unknown) => (typeof value === "string" ? value : JSON
       width: 100%;
     }
 
-    .terminal {
+    .terminal:not(.terminal-hero) {
       font-size: 11.5px;
     }
 
     .terminal-body {
       padding: 16px;
       min-height: 280px;
+    }
+
+    .terminal-hero .terminal-body {
+      padding: 22px 24px 26px;
+      min-height: 360px;
+    }
+
+    .terminal-hero {
+      margin-inline: 8px;
     }
 
     .section {
