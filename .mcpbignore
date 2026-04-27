@@ -4,6 +4,7 @@
 docs/
 tests/
 scripts/
+landing/
 .pytest_cache/
 __pycache__/
 
