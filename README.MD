@@ -113,6 +113,27 @@ Run server manually (stdio):
 EURLEX_USERNAME="..." EURLEX_PASSWORD="..." node server/index.js
 ```
 
+## Static landing page
+
+The marketing landing page lives in `landing/` as a standalone Astro static site.
+It is intentionally separate from the MCP server package so Cloudflare Pages can serve the public
+landing page without starting the container-backed MCP runtime.
+
+```bash
+cd landing
+npm install
+npm run build
+```
+
+Cloudflare Pages settings:
+- Root directory: `landing`
+- Build command: `npm run build`
+- Build output directory: `dist`
+- Node.js version: `22.12.0` or newer
+- Environment variable: `ASTRO_TELEMETRY_DISABLED=1`
+
+Keep MCP, dashboard, and admin traffic routed to the container-backed service only for dynamic paths.
+
 ## MCPB packaging
 
 ```bash
