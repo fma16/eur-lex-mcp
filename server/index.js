@@ -26,6 +26,7 @@ import {
   parseLanguage
 } from "./validation.js";
 import { errorResponse, successResponse, toolTextPayload } from "./responses.js";
+import { buildCaseLawExpertQuery, parseCaseLawCelex } from "./case-law.js";
 
 const DEFAULT_TIMEOUT_MS = Number(process.env.DEFAULT_TIMEOUT_MS || 15000);
 const MAX_PAGE_SIZE = Number(process.env.MAX_PAGE_SIZE || 50);
@@ -217,6 +218,89 @@ const tools = [
       },
       required: ["celex"]
     }
+  },
+  {
+    name: "search_eu_case_law",
+    description:
+      "Search EUR-Lex EU case-law only (CELEX sector 6). Supports simple text/title/year filters and optional expert query fragments.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        text: {
+          type: "string",
+          description: "Optional full-text words or phrase to search within EU case-law"
+        },
+        title: {
+          type: "string",
+          description: "Optional title words or phrase to search within EU case-law"
+        },
+        year: {
+          type: "integer",
+          minimum: 1950,
+          maximum: 9999,
+          description: "Optional CELEX year filter, e.g. 2024"
+        },
+        celex: {
+          type: "string",
+          description:
+            "Optional exact case-law CELEX identifier. If provided, other filters are ignored."
+        },
+        expert_query: {
+          type: "string",
+          description:
+            "Optional EUR-Lex expert query fragment ANDed with the case-law sector filter, e.g. DD >= 01/01/2020"
+        },
+        language: {
+          type: "string",
+          description: "Two-letter language code",
+          default: "en"
+        },
+        page: {
+          type: "integer",
+          minimum: 1,
+          default: 1
+        },
+        page_size: {
+          type: "integer",
+          minimum: 1,
+          maximum: 100,
+          default: 10
+        },
+        timeout_ms: {
+          type: "integer",
+          minimum: 1000,
+          maximum: 60000,
+          description: "Optional timeout override"
+        }
+      }
+    }
+  },
+  {
+    name: "get_case_law_by_celex",
+    description: "Retrieve one EUR-Lex EU case-law document by exact CELEX sector-6 identifier",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        celex: {
+          type: "string",
+          description: "EU case-law CELEX identifier, e.g. 62019CJ0311"
+        },
+        language: {
+          type: "string",
+          description: "Two-letter language code",
+          default: "en"
+        },
+        timeout_ms: {
+          type: "integer",
+          minimum: 1000,
+          maximum: 60000,
+          description: "Optional timeout override"
+        }
+      },
+      required: ["celex"]
+    }
   }
 ];
 
@@ -396,6 +480,59 @@ async function runGetDocumentToc(args) {
   });
 }
 
+async function runSearchEuCaseLaw(args) {
+  const query = buildCaseLawExpertQuery(args);
+  const language = parseLanguage(args.language);
+  const page = parsePage(args.page);
+  const pageSize = parsePageSize(args.page_size, cli.maxPageSize);
+  const timeoutMs = parseTimeoutMs(args.timeout_ms, cli.defaultTimeoutMs);
+
+  const data = await eurLexClient.search({
+    query,
+    language,
+    page,
+    pageSize,
+    timeoutMs
+  });
+
+  return successResponse({
+    query,
+    language,
+    total: data.total,
+    page: data.page,
+    page_size: data.page_size,
+    results: data.results
+  });
+}
+
+async function runGetCaseLawByCelex(args) {
+  const celex = parseCaseLawCelex(args.celex);
+  const language = parseLanguage(args.language);
+  const timeoutMs = parseTimeoutMs(args.timeout_ms, cli.defaultTimeoutMs);
+
+  const data = await eurLexClient.search({
+    query: `DN = ${celex}`,
+    language,
+    page: 1,
+    pageSize: 1,
+    timeoutMs
+  });
+
+  const document = data.results[0] || null;
+  if (!document) {
+    return errorResponse("Case-law document not found", {
+      code: "CASE_LAW_DOCUMENT_NOT_FOUND",
+      celex
+    });
+  }
+
+  return successResponse({
+    celex,
+    language,
+    document
+  });
+}
+
 server.setRequestHandler(CallToolRequestSchema, async (request) => {
   const toolName = request.params.name;
   const args = request.params.arguments || {};
@@ -417,6 +554,14 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
     if (toolName === "get_document_toc") {
       return toolTextPayload(await runGetDocumentToc(args));
+    }
+
+    if (toolName === "search_eu_case_law") {
+      return toolTextPayload(await runSearchEuCaseLaw(args));
+    }
+
+    if (toolName === "get_case_law_by_celex") {
+      return toolTextPayload(await runGetCaseLawByCelex(args));
     }
 
     throw new McpError(ErrorCode.MethodNotFound, `Unknown tool: ${toolName}`);

@@ -55,6 +55,14 @@
     {
       "name": "get_document_toc",
       "description": "Retrieve the document table of contents (chapters/sections/articles) with numbering and titles. Default language is French and can be changed."
+    },
+    {
+      "name": "search_eu_case_law",
+      "description": "Search EUR-Lex EU case-law only (CELEX sector 6) with simple filters or an expert query fragment."
+    },
+    {
+      "name": "get_case_law_by_celex",
+      "description": "Fetch a European Union case-law document by exact CELEX sector-6 identifier."
     }
   ],
   "compatibility": {

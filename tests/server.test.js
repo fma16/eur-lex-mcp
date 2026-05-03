@@ -1,7 +1,12 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { formatEurLexHttpError, normalizeSearchResponse } from "../server/eurlex-client.js";
+import {
+  formatEurLexHttpError,
+  isRetryableEurLexError,
+  normalizeSearchResponse,
+  withEurLexRetry
+} from "../server/eurlex-client.js";
 import {
   extractArticleFromXhtml,
   extractRecitalsFromXhtml,
@@ -15,6 +20,11 @@ import {
   parseTimeoutMs
 } from "../server/validation.js";
 import { errorResponse, successResponse } from "../server/responses.js";
+import {
+  buildCaseLawExpertQuery,
+  parseCaseLawCelex,
+  parseCaseLawYear
+} from "../server/case-law.js";
 
 test("validation utilities enforce constraints", () => {
   assert.equal(parseLanguage("EN"), "en");
@@ -142,6 +152,28 @@ test("response helpers produce consistent shape", () => {
   assert.equal(failure.error.code, "ERR");
 });
 
+test("case-law helpers enforce CELEX sector 6", () => {
+  assert.equal(parseCaseLawCelex("62019CJ0311"), "62019CJ0311");
+  assert.throws(() => parseCaseLawCelex("32016R0679"), /sector 6/);
+});
+
+test("case-law query builder scopes searches to EU case-law", () => {
+  assert.equal(buildCaseLawExpertQuery({}), "DN = 6*");
+  assert.equal(buildCaseLawExpertQuery({ year: 2024 }), "DN = 62024*");
+  assert.equal(
+    buildCaseLawExpertQuery({
+      text: "data protection",
+      title: "Schrems",
+      expert_query: "DD >= 01/01/2020"
+    }),
+    'DN = 6* AND Text ~ "data protection" AND TI ~ "Schrems" AND (DD >= 01/01/2020)'
+  );
+  assert.equal(buildCaseLawExpertQuery({ celex: "62019CJ0311", text: "ignored" }), "DN = 62019CJ0311");
+  assert.equal(parseCaseLawYear("2020"), 2020);
+  assert.throws(() => parseCaseLawYear(1949), /Invalid year/);
+  assert.throws(() => buildCaseLawExpertQuery({ text: 'bad "quote' }), /double quotes/);
+});
+
 test("formatEurLexHttpError clarifies WS_QUERY_SYNTAX_ERROR", () => {
   const faultXml =
     "<?xml version='1.0' encoding='UTF-8'?><S:Envelope xmlns:S='http://www.w3.org/2003/05/soap-envelope'><S:Body><ns1:Fault xmlns:ns1='http://www.w3.org/2003/05/soap-envelope'><ns1:Code><ns1:Value>ns1:Sender</ns1:Value><ns1:Subcode><ns1:Value xmlns:ns2='http://eur-lex.europa.eu/search'>ns2:WS_QUERY_SYNTAX_ERROR</ns1:Value></ns1:Subcode></ns1:Code><ns1:Reason><ns1:Text xml:lang='en'>Erreur a la ligne 1, caractere 8.</ns1:Text></ns1:Reason></ns1:Fault></S:Body></S:Envelope>";
@@ -149,6 +181,53 @@ test("formatEurLexHttpError clarifies WS_QUERY_SYNTAX_ERROR", () => {
   const message = formatEurLexHttpError(500, faultXml);
   assert.match(message, /Invalid EUR-Lex expert query syntax/i);
   assert.match(message, /DN = 32016R0679/);
+});
+
+test("EUR-Lex retry helper retries idle interval failures", async () => {
+  let attempts = 0;
+  const sleeps = [];
+  const result = await withEurLexRetry(
+    async () => {
+      attempts += 1;
+      if (attempts < 2) {
+        throw new Error("EUR-Lex HTTP 500: ns1:Sender - The call must not be performed within the idle interval");
+      }
+      return "ok";
+    },
+    {
+      retryDelaysMs: [5, 10],
+      sleep: async (delayMs) => {
+        sleeps.push(delayMs);
+      }
+    }
+  );
+
+  assert.equal(result, "ok");
+  assert.equal(attempts, 2);
+  assert.deepEqual(sleeps, [5]);
+});
+
+test("EUR-Lex retry helper does not retry syntax errors", async () => {
+  let attempts = 0;
+  await assert.rejects(
+    () =>
+      withEurLexRetry(
+        async () => {
+          attempts += 1;
+          throw new Error("Invalid EUR-Lex expert query syntax.");
+        },
+        {
+          retryDelaysMs: [5],
+          sleep: async () => {}
+        }
+      ),
+    /Invalid EUR-Lex expert query syntax/
+  );
+  assert.equal(attempts, 1);
+  assert.equal(
+    isRetryableEurLexError(new Error("EUR-Lex HTTP 503: Service Unavailable")),
+    true
+  );
 });
 
 test("extractArticleFromXhtml excludes recitals and returns article content", () => {

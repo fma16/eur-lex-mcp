@@ -1,6 +1,8 @@
 import { XMLParser } from "fast-xml-parser";
 import { DEFAULT_SERVICE_HTTP, DEFAULT_SERVICE_HTTPS } from "./constants.js";
 
+const DEFAULT_RETRY_DELAYS_MS = [2500, 7500, 15000];
+
 const parser = new XMLParser({
   ignoreAttributes: false,
   attributeNamePrefix: "",
@@ -151,6 +153,15 @@ export class EurLexSoapClient {
   }
 
   async searchRaw({ query, language, page, pageSize, timeoutMs }) {
+    return withEurLexRetry(
+      () => this.searchRawOnce({ query, language, page, pageSize, timeoutMs }),
+      {
+        logger: this.logger
+      }
+    );
+  }
+
+  async searchRawOnce({ query, language, page, pageSize, timeoutMs }) {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), timeoutMs);
 
@@ -335,6 +346,53 @@ export class EurLexSoapClient {
 
     throw new Error(`Unable to download DOC_1 stream: ${errors.join(" | ")}`);
   }
+}
+
+export function isRetryableEurLexError(error) {
+  const message = error instanceof Error ? error.message : String(error || "");
+  const normalized = message.toLowerCase();
+
+  return (
+    normalized.includes("idle interval") ||
+    normalized.includes("timed out") ||
+    normalized.includes("fetch failed") ||
+    normalized.includes("http 429") ||
+    normalized.includes("http 503") ||
+    normalized.includes("http 504")
+  );
+}
+
+export async function withEurLexRetry(operation, {
+  retryDelaysMs = DEFAULT_RETRY_DELAYS_MS,
+  sleep = sleepMs,
+  logger
+} = {}) {
+  let lastError;
+
+  for (let attempt = 0; attempt <= retryDelaysMs.length; attempt += 1) {
+    try {
+      return await operation(attempt + 1);
+    } catch (error) {
+      lastError = error;
+      if (!isRetryableEurLexError(error) || attempt >= retryDelaysMs.length) {
+        throw error;
+      }
+
+      const delayMs = retryDelaysMs[attempt];
+      logger?.debug?.("Retrying EUR-Lex request after transient error", {
+        attempt: attempt + 1,
+        delayMs,
+        message: error instanceof Error ? error.message : String(error)
+      });
+      await sleep(delayMs);
+    }
+  }
+
+  throw lastError;
+}
+
+function sleepMs(delayMs) {
+  return new Promise((resolve) => setTimeout(resolve, delayMs));
 }
 
 function extractManifestationIds(rawXml) {

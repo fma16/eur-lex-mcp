@@ -8,6 +8,7 @@ Production-oriented MCP Bundle (MCPB) for EUR-Lex expert search using a local No
 - Node MCP server at `server/index.js`
 - Defensive input validation and bounded limits
 - Timeout management with request abortion
+- Automatic retry/backoff for transient EUR-Lex failures such as idle-interval throttling
 - Structured, consistent JSON tool payloads
 - Logging with configurable log levels
 - Validation/test scripts for quick host-readiness checks
@@ -62,6 +63,41 @@ Output includes numbered entries and titles for structural levels when present:
 - parts/titles/chapters/sections/subsections/articles
 - each entry carries its identifier, numbering label, and title
 
+### `search_eu_case_law`
+Searches EUR-Lex EU case-law only by forcing the CELEX sector-6 filter.
+
+Inputs:
+- `text` (optional string): full-text words or phrase
+- `title` (optional string): title words or phrase
+- `year` (optional integer): CELEX year filter, e.g. `2024`
+- `celex` (optional string): exact sector-6 CELEX identifier; if provided, other filters are ignored
+- `expert_query` (optional string): EUR-Lex expert query fragment ANDed with the case-law filter
+- `language` (optional 2-letter code, default `en`)
+- `page` (optional integer, default `1`)
+- `page_size` (optional integer, default `10`, bounded by config)
+- `timeout_ms` (optional integer)
+
+Important behavior:
+- The generated query always scopes broad searches to `DN = 6*` or `DN = 6YYYY*`.
+- `expert_query` is for advanced EUR-Lex expert syntax, for example `DD >= 01/01/2020`.
+- Use `expert_search` directly when you need complete control over the EUR-Lex query.
+
+Examples:
+- Find the Mousse case by title: `title="Mousse"`
+- Find case-law from a CELEX year: `year=2023`
+- Find a known case-law document: `celex="62023CJ0394"`
+
+### `get_case_law_by_celex`
+Retrieves one EU case-law document by exact CELEX identifier and rejects non-sector-6 CELEX values.
+
+Inputs:
+- `celex` (required string, validated as sector 6, e.g. `62019CJ0311`)
+- `language` (optional 2-letter code, default `en`)
+- `timeout_ms` (optional integer)
+
+Example:
+- `celex="62023CJ0394"` retrieves the Court judgment in case C-394/23, Mousse / CNIL and SNCF Connect.
+
 ## Quick start
 
 ```bash
@@ -92,4 +128,7 @@ See full setup and verification guide in `docs/MCPB_SETUP.md`.
 - No credentials are logged.
 - Input schemas and runtime validators reject malformed values.
 - Requests use explicit per-call timeout with `AbortController`.
+- EUR-Lex SOAP requests are retried automatically for transient failures: idle-interval throttling, timeouts, network fetch failures, and HTTP `429`, `503`, or `504`.
+- Retry delays are progressive: `2500ms`, `7500ms`, then `15000ms`.
+- Non-transient errors, including invalid expert query syntax, are not retried.
 - Responses are normalized into a stable `{ ok, data, error }` contract.
