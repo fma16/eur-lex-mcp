@@ -1,6 +1,6 @@
 # EUR-Lex MCPB Bundle
 
-Production-oriented MCP Bundle (MCPB) for EUR-Lex expert search and French judicial case-law lookup using a local Node.js MCP server (`@modelcontextprotocol/sdk`) over stdio.
+Production-oriented MCP Bundle (MCPB) for EUR-Lex expert search and French case-law lookup using a local Node.js MCP server (`@modelcontextprotocol/sdk`) over stdio.
 
 ## What this includes
 
@@ -9,8 +9,8 @@ Production-oriented MCP Bundle (MCPB) for EUR-Lex expert search and French judic
 - Defensive input validation and bounded limits
 - Timeout management with request abortion
 - Automatic retry/backoff for transient EUR-Lex failures such as idle-interval throttling
-- Judilibre sandbox access through a PISTE API key (`KeyId`), with OAuth client credentials available as a fallback
-- Search, decision retrieval, and taxonomy lookup for French judicial case law
+- Judilibre and Legifrance sandbox access through PISTE credentials
+- Search, decision retrieval, and taxonomy/schema lookup for French judicial, administrative, constitutional, financial, and CNIL case law
 - Structured, consistent JSON tool payloads
 - Logging with configurable log levels
 - Validation/test scripts for quick host-readiness checks
@@ -101,65 +101,91 @@ Example:
 - `celex="62023CJ0394"` retrieves the Court judgment in case C-394/23, Mousse / CNIL and SNCF Connect.
 
 ### `search_french_case_law`
-Searches French judicial case law through the Judilibre sandbox API.
+Searches French case law across Judilibre and Legifrance.
+
+Routing:
+- `judicial`: Judilibre first, then Legifrance `JURI` when fallback is needed.
+- `administrative`: Legifrance `CETAT`.
+- `constitutional`: Legifrance `CONSTIT`.
+- `financial`: Legifrance `JUFI`.
+- `cnil`: Legifrance `CNIL`.
 
 Inputs:
+- `source` (optional enum: `auto`, `judilibre`, `legifrance`, `all`; default `auto`)
+- `fallback` (optional enum: `when_empty`, `when_no_exact_match`, `never`; default `when_no_exact_match`)
+- `case_law_family` (optional enum: `auto`, `judicial`, `administrative`, `constitutional`, `financial`, `cnil`; default `auto`)
+- `fond` (optional enum: `auto`, `JURI`, `CETAT`, `CONSTIT`, `JUFI`, `CNIL`; default `auto`)
 - `query` (optional string): text query
+- `case_number` (optional string): case or decision number
+- `ecli` (optional string): exact ECLI filter where supported
+- `nor` (optional string): NOR search/filter for `CONSTIT` or `CNIL`
 - `operator` (optional enum: `or`, `and`, `exact`; default `and`)
 - `field` (optional string array): targeted content fields, e.g. `motivations`, `dispositif`
 - `jurisdiction` (optional string array): e.g. `cc`, `ca`, `tj`, `tcom`
 - `chamber` (optional string array): e.g. `civ1`, `comm`, `soc`, `cr`
 - `location`, `theme`, `solution`, `type`, `publication` (optional string arrays): taxonomy keys
-- `date_start`, `date_end` (optional ISO date/datetime strings)
-- `sort` (optional enum: `score`, `scorepub`, `date`; default `scorepub`)
+- `date_start`, `date_end` (optional ISO date strings for Legifrance; Judilibre also accepts datetimes)
+- `sort` (optional enum: Judilibre `score`, `scorepub`, `date`; Legifrance `PERTINENCE`, `DATE_DESC`, `DATE_ASC`)
+- `second_sort` (optional Legifrance secondary sort)
 - `order` (optional enum: `asc`, `desc`; default `desc`)
-- `page` (optional integer, default `0`; Judilibre pages are zero-based)
+- `page` (optional integer, default `0`; exposed as zero-based and converted for Legifrance internally)
 - `page_size` (optional integer, default `10`, max `50`)
 - `resolve_references` (optional boolean, default `true`)
 - `particular_interest` (optional boolean, default `false`)
 - `timeout_ms` (optional integer)
 
-Output is compact: decision metadata plus bounded highlighted snippets. Use `get_french_case_law_decision` with a returned `id` to retrieve the full or zoned text.
+Output is compact and source-aware. Each result includes `source`, `source_id`, `case_law_family`, and, for Legifrance results, `fond`.
 
 ### `get_french_case_law_decision`
-Retrieves one French judicial decision from Judilibre by id.
+Retrieves one French case-law decision from Judilibre or Legifrance.
 
 Inputs:
-- `id` (required string): Judilibre decision id returned by `search_french_case_law`
+- `id` (optional string): Judilibre 24-hex id or Legifrance text id such as `JURITEXT...`, `CETATEXT...`, `CONSTITEXT...`, `CNILTEXT...`
+- `source` (optional enum: `auto`, `judilibre`, `legifrance`; default `auto`)
+- `fallback` (optional enum: `when_empty`, `when_no_exact_match`, `never`; default `when_no_exact_match`)
+- `case_law_family` (optional enum: `auto`, `judicial`, `administrative`, `constitutional`, `financial`, `cnil`; default `auto`)
+- `fond` (optional enum: `auto`, `JURI`, `CETAT`, `CONSTIT`, `JUFI`, `CNIL`; default `auto`)
+- `case_number`, `decision_date`, `ecli`, `nor` (optional): used to resolve a Legifrance id when no id is known or Judilibre fallback is needed
 - `text_scope` (optional enum, default `full_text`):
   - `metadata`: metadata only
-  - `full_text`: full decision text plus zone offsets
-  - `zones`: all structured text sections
-  - `introduction`, `expose`, `moyens`, `motivations`, `dispositif`, `annexes`: one zone only
+  - `full_text`: full decision text
+  - `zones`, `introduction`, `expose`, `moyens`, `motivations`, `dispositif`, `annexes`: Judilibre structured text scopes when available
 - `resolve_references` (optional boolean, default `true`)
-- `query` (optional string): terms to highlight in the returned decision
+- `query` (optional string): terms to highlight when supported by the source
 - `operator` (optional enum: `or`, `and`, `exact`; default `and`)
 - `timeout_ms` (optional integer)
 
-### `get_judilibre_taxonomy`
-Retrieves Judilibre taxonomy values used by French case-law search filters.
+### `get_french_case_law_taxonomy`
+Retrieves unified French case-law taxonomy and schema metadata.
 
 Inputs:
-- `taxonomy_id` (optional string): e.g. `jurisdiction`, `chamber`, `location`, `theme`, `solution`, `type`, `publication`, `field`, `zones`, `filetype`
-- `key` (optional string): resolve one key; requires `taxonomy_id`
-- `value` (optional string): reverse-resolve one label; requires `taxonomy_id`
-- `context_value` (optional string): contextual lookup value, e.g. `cc` for chambers or `tj`/`ca` for locations
+- `source` (optional enum: `auto`, `judilibre`, `legifrance`, `all`; default `auto`)
+- `case_law_family` (optional enum: `auto`, `judicial`, `administrative`, `constitutional`, `financial`, `cnil`; default `auto`)
+- `fond` (optional enum: `auto`, `JURI`, `CETAT`, `CONSTIT`, `JUFI`, `CNIL`; default `auto`)
+- `taxonomy_id`:
+  - Legifrance: `fond`, `case_law_family`, `search_field`, `filter`, `sort`
+  - Judilibre: `jurisdiction`, `chamber`, `location`, `theme`, `solution`, `type`, `publication`, `field`, `zones`, `filetype`
+- `key`, `value`, `context_value`: Judilibre passthrough parameters where applicable
 - `timeout_ms` (optional integer)
+
+### `get_judilibre_taxonomy`
+Deprecated alias for `get_french_case_law_taxonomy` with `source="judilibre"`.
 
 ## Quick start
 
 ```bash
 npm install
 cp .env.example .env
-# Set EURLEX_USERNAME / EURLEX_PASSWORD and PISTE_SANDBOX_API_KEY in your environment
-# Optional fallback: PISTE_SANDBOX_CLIENT_ID / PISTE_SANDBOX_CLIENT_SECRET
+# Set EURLEX_USERNAME / EURLEX_PASSWORD in your environment.
+# Judilibre can use PISTE_SANDBOX_API_KEY as KeyId.
+# Legifrance requires PISTE_SANDBOX_CLIENT_ID / PISTE_SANDBOX_CLIENT_SECRET for OAuth.
 npm run check
 ```
 
 Run server manually (stdio):
 
 ```bash
-EURLEX_USERNAME="..." EURLEX_PASSWORD="..." PISTE_SANDBOX_API_KEY="..." node server/index.js
+EURLEX_USERNAME="..." EURLEX_PASSWORD="..." PISTE_SANDBOX_API_KEY="..." PISTE_SANDBOX_CLIENT_ID="..." PISTE_SANDBOX_CLIENT_SECRET="..." node server/index.js
 ```
 
 ## MCPB packaging
@@ -177,7 +203,7 @@ See full setup and verification guide in `docs/MCPB_SETUP.md`.
 - No credentials are logged.
 - Input schemas and runtime validators reject malformed values.
 - Requests use explicit per-call timeout with `AbortController`.
-- Judilibre is currently wired to the PISTE sandbox endpoints only. Production credentials/endpoints should be added after sandbox validation.
+- Judilibre and Legifrance are currently wired to PISTE sandbox endpoints only. Production credentials/endpoints should be added after sandbox validation.
 - EUR-Lex SOAP requests are retried automatically for transient failures: idle-interval throttling, timeouts, network fetch failures, and HTTP `429`, `503`, or `504`.
 - Retry delays are progressive: `2500ms`, `7500ms`, then `15000ms`.
 - Non-transient errors, including invalid expert query syntax, are not retried.

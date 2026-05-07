@@ -2,10 +2,10 @@
   "$schema": "https://raw.githubusercontent.com/modelcontextprotocol/mcpb/main/dist/mcpb-manifest.schema.json",
   "manifest_version": "0.3",
   "name": "eur-lex-search",
-  "display_name": "EUR-Lex and Judilibre Search",
+  "display_name": "EUR-Lex and French Case Law Search",
   "version": "1.0.0",
-  "description": "Search EUR-Lex legal documents and French judicial case law using MCP tools.",
-  "long_description": "Local MCP Bundle for querying EUR-Lex via SOAP and Judilibre via PISTE sandbox OAuth with strict input validation, timeout controls, and consistent structured JSON responses for tool consumers.",
+  "description": "Search EUR-Lex legal documents and French case law using MCP tools.",
+  "long_description": "Local MCP Bundle for querying EUR-Lex via SOAP, Judilibre, and Legifrance case-law funds via PISTE sandbox credentials with strict input validation, timeout controls, and consistent structured JSON responses for tool consumers.",
   "author": {
     "name": "EUR-Lex MCP Contributors"
   },
@@ -17,6 +17,7 @@
   "keywords": [
     "eur-lex",
     "judilibre",
+    "legifrance",
     "legal",
     "eu-law",
     "french-case-law",
@@ -71,15 +72,19 @@
     },
     {
       "name": "search_french_case_law",
-      "description": "Search French judicial case law through the Judilibre API sandbox with simple filters."
+      "description": "Search French case law across Judilibre and Legifrance, with automatic routing for judicial, administrative, constitutional, financial, and CNIL decisions."
     },
     {
       "name": "get_french_case_law_decision",
-      "description": "Fetch a French judicial decision from Judilibre by id with selectable text scope."
+      "description": "Fetch a French case-law decision from Judilibre or Legifrance by id or by metadata fallback."
+    },
+    {
+      "name": "get_french_case_law_taxonomy",
+      "description": "Fetch unified French case-law taxonomy/schema metadata for Judilibre and Legifrance funds."
     },
     {
       "name": "get_judilibre_taxonomy",
-      "description": "Fetch Judilibre taxonomy values used by French case-law search filters."
+      "description": "Deprecated alias for Judilibre taxonomy values used by French case-law search filters."
     }
   ],
   "compatibility": {
@@ -110,21 +115,21 @@
     "piste_sandbox_client_id": {
       "type": "string",
       "title": "PISTE Sandbox Client ID",
-      "description": "Optional PISTE OAuth client id for the Judilibre sandbox API. Used only when no API key is configured.",
+      "description": "PISTE OAuth client id for Légifrance sandbox access. Also usable as an OAuth fallback for Judilibre.",
       "required": false,
       "sensitive": true
     },
     "piste_sandbox_client_secret": {
       "type": "string",
       "title": "PISTE Sandbox Client Secret",
-      "description": "Optional PISTE OAuth client secret for the Judilibre sandbox API. Used only when no API key is configured.",
+      "description": "PISTE OAuth client secret for Légifrance sandbox access. Also usable as an OAuth fallback for Judilibre.",
       "required": false,
       "sensitive": true
     },
     "piste_sandbox_api_key": {
       "type": "string",
       "title": "PISTE Sandbox API Key",
-      "description": "PISTE API key used as the Judilibre sandbox KeyId header.",
+      "description": "PISTE API key used as the sandbox KeyId header for Judilibre. Légifrance uses OAuth when client credentials are configured.",
       "required": true,
       "sensitive": true
     },

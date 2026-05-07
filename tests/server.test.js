@@ -34,6 +34,14 @@ import {
   normalizeJudilibreDecision,
   normalizeJudilibreSearchResponse
 } from "../server/judilibre-client.js";
+import {
+  buildLegifranceSearchArgs,
+  getLegifranceCaseLawTaxonomy,
+  LegifranceClient,
+  normalizeLegifranceDecision,
+  normalizeLegifranceSearchResponse
+} from "../server/legifrance-client.js";
+import { FrenchCaseLawRouter } from "../server/french-case-law-router.js";
 
 test("validation utilities enforce constraints", () => {
   assert.equal(parseLanguage("EN"), "en");
@@ -388,6 +396,221 @@ test("Judilibre client can authenticate API requests with PISTE KeyId", async ()
   assert.equal(calls[0].options.headers.KeyId, "sandbox-api-key");
   assert.equal(calls[0].options.headers.Authorization, undefined);
   assert.equal(new URL(calls[0].url).pathname, "/cassation/judilibre/v1.0/search");
+});
+
+test("Legifrance search args map case-law families to fonds and filters", () => {
+  const administrative = buildLegifranceSearchArgs(
+    {
+      case_law_family: "administrative",
+      query: "permis de construire",
+      case_number: "428409",
+      ecli: "ECLI:FR:CECHR:2020:428409.20200101",
+      date_start: "2020-01-01",
+      date_end: "2020-12-31",
+      page: 0,
+      page_size: 20
+    },
+    { maxPageSize: 50, defaultTimeoutMs: 15000 }
+  );
+
+  assert.equal(administrative.fond, "CETAT");
+  assert.equal(administrative.family, "administrative");
+  assert.equal(administrative.body.recherche.pageNumber, 1);
+  assert.equal(administrative.body.recherche.pageSize, 20);
+  assert.equal(administrative.body.recherche.champs[0].typeChamp, "NUM_DEC");
+  assert.equal(administrative.body.recherche.filtres[0].facette, "DATE_DECISION");
+  assert.equal(administrative.body.recherche.filtres[1].facette, "ECLI");
+
+  const constitutional = buildLegifranceSearchArgs(
+    { case_law_family: "constitutional", case_number: "2023-1067 QPC" },
+    { maxPageSize: 50, defaultTimeoutMs: 15000 }
+  );
+  assert.equal(constitutional.fond, "CONSTIT");
+  assert.equal(constitutional.body.recherche.champs[0].typeChamp, "NUM_DEC");
+
+  const financial = buildLegifranceSearchArgs(
+    { case_law_family: "financial", query: "gestion de fait" },
+    { maxPageSize: 50, defaultTimeoutMs: 15000 }
+  );
+  assert.equal(financial.fond, "JUFI");
+  assert.equal(financial.body.recherche.champs[0].typeChamp, "ALL");
+});
+
+test("Legifrance client prefers OAuth bearer authentication when credentials are available", async () => {
+  const calls = [];
+  const fetchImpl = async (url, options) => {
+    calls.push({ url: String(url), options });
+    if (String(url).includes("/oauth/token")) {
+      return new Response(
+        JSON.stringify({
+          access_token: "legifrance-token",
+          expires_in: 3600
+        }),
+        { status: 200 }
+      );
+    }
+    return new Response(JSON.stringify({ totalResultNumber: 0, results: [] }), { status: 200 });
+  };
+
+  const client = new LegifranceClient({
+    apiKey: "sandbox-api-key",
+    clientId: "client-id",
+    clientSecret: "client-secret",
+    apiUrl: "https://example.test/dila/legifrance/lf-engine-app",
+    tokenUrl: "https://example.test/api/oauth/token",
+    fetchImpl
+  });
+
+  await client.search({
+    body: { fond: "CETAT", recherche: { pageSize: 1 } },
+    timeoutMs: 15000
+  });
+
+  assert.equal(calls.length, 2);
+  assert.equal(calls[0].options.body.get("client_id"), "client-id");
+  assert.equal(calls[1].options.headers.Authorization, "Bearer legifrance-token");
+  assert.equal(calls[1].options.headers.KeyId, undefined);
+});
+
+test("Legifrance normalizers return unified result and decision shapes", () => {
+  const search = normalizeLegifranceSearchResponse(
+    {
+      totalResultNumber: 1,
+      results: [
+        {
+          titles: [
+            {
+              id: "CETATEXT000012345678",
+              cid: "CETATEXT000012345678",
+              title: "Conseil d'Etat, 1ere chambre"
+            }
+          ],
+          text: "Extrait de la decision",
+          sections: [
+            {
+              extracts: [
+                {
+                  searchFieldName: "Numéro décision",
+                  values: ["428409"]
+                }
+              ]
+            }
+          ],
+          ecli: "ECLI:FR:CECHR:2024:428409.20240110"
+        }
+      ]
+    },
+    { fond: "CETAT" }
+  );
+
+  assert.equal(search.case_law_family, "administrative");
+  assert.equal(search.results[0].source, "legifrance");
+  assert.equal(search.results[0].source_id, "CETATEXT000012345678");
+  assert.equal(search.results[0].number, "428409");
+  assert.equal(search.results[0].summary, "Extrait de la decision");
+
+  const decision = normalizeLegifranceDecision(
+    {
+      result: {
+        id: "CONSTITEXT000012345678",
+        title: "Decision QPC",
+        dateDecision: Date.parse("2024-02-01T00:00:00Z"),
+        numDecision: "2023-1067 QPC",
+        html: "<p>Vu la Constitution.</p><p>Decide.</p>"
+      }
+    },
+    { fond: "CONSTIT", textScope: "full_text" }
+  );
+
+  assert.equal(decision.case_law_family, "constitutional");
+  assert.equal(decision.source_id, "CONSTITEXT000012345678");
+  assert.equal(decision.decision_date, "2024-02-01");
+  assert.match(decision.text, /Vu la Constitution/);
+  assert.doesNotMatch(decision.text, /<p>/);
+});
+
+test("Legifrance taxonomy exposes fonds, fields, filters, and sorts", () => {
+  const fonds = getLegifranceCaseLawTaxonomy({ taxonomy_id: "fond" });
+  assert.ok(fonds.some((fond) => fond.key === "CETAT" && fond.case_law_family === "administrative"));
+  assert.ok(fonds.some((fond) => fond.key === "CONSTIT" && fond.case_law_family === "constitutional"));
+  assert.ok(fonds.some((fond) => fond.key === "JUFI" && fond.case_law_family === "financial"));
+
+  const filters = getLegifranceCaseLawTaxonomy({
+    fond: "JUFI",
+    taxonomy_id: "filter"
+  });
+  assert.ok(filters.some((filter) => filter.value === "JURIDICTION_NATURE"));
+});
+
+test("French case-law router sends non-judicial families directly to Legifrance", async () => {
+  const calls = [];
+  const router = new FrenchCaseLawRouter({
+    judilibreClient: {
+      search: async () => {
+        throw new Error("Judilibre should not be called");
+      }
+    },
+    legifranceClient: {
+      search: async ({ body }) => {
+        calls.push(body);
+        return {
+          totalResultNumber: 1,
+          results: [{ id: "JUFINAL000012345678", title: "Cour des comptes", dateDecision: "2024-01-01" }]
+        };
+      }
+    },
+    maxPageSize: 50,
+    defaultTimeoutMs: 15000
+  });
+
+  const response = await router.search({
+    case_law_family: "financial",
+    query: "gestion de fait",
+    page_size: 5
+  });
+
+  assert.equal(response.ok, true);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].fond, "JUFI");
+  assert.equal(response.data.sources_attempted[0].source, "legifrance");
+  assert.equal(response.data.results[0].case_law_family, "financial");
+});
+
+test("French case-law router falls back from Judilibre to Legifrance when no exact judicial match exists", async () => {
+  const calls = [];
+  const router = new FrenchCaseLawRouter({
+    judilibreClient: {
+      search: async () => ({
+        total: 1,
+        results: [{ id: "6079a8649ba5988459c4d151", number: "94-86.039", decision_date: "1996-03-27" }]
+      })
+    },
+    legifranceClient: {
+      search: async ({ body }) => {
+        calls.push(body);
+        return {
+          totalResultNumber: 1,
+          results: [{ id: "JURITEXT000012345678", numAffaire: "95-00.001", dateDecision: "1997-01-01" }]
+        };
+      }
+    },
+    maxPageSize: 50,
+    defaultTimeoutMs: 15000
+  });
+
+  const response = await router.search({
+    case_law_family: "judicial",
+    case_number: "95-00.001",
+    decision_date: "1997-01-01"
+  });
+
+  assert.equal(response.ok, true);
+  assert.equal(calls.length, 1);
+  assert.deepEqual(
+    response.data.sources_attempted.map((attempt) => attempt.source),
+    ["judilibre", "legifrance"]
+  );
+  assert.equal(response.data.results.some((result) => result.source === "legifrance"), true);
 });
 
 test("formatEurLexHttpError clarifies WS_QUERY_SYNTAX_ERROR", () => {

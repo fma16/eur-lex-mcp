@@ -27,14 +27,9 @@ import {
 } from "./validation.js";
 import { errorResponse, successResponse, toolTextPayload } from "./responses.js";
 import { buildCaseLawExpertQuery, parseCaseLawCelex } from "./case-law.js";
-import {
-  JudilibreClient,
-  buildJudilibreDecisionArgs,
-  buildJudilibreSearchArgs,
-  buildJudilibreTaxonomyArgs,
-  normalizeJudilibreDecision,
-  normalizeJudilibreSearchResponse
-} from "./judilibre-client.js";
+import { JudilibreClient } from "./judilibre-client.js";
+import { LegifranceClient } from "./legifrance-client.js";
+import { FrenchCaseLawRouter } from "./french-case-law-router.js";
 
 const DEFAULT_TIMEOUT_MS = Number(process.env.DEFAULT_TIMEOUT_MS || 15000);
 const MAX_PAGE_SIZE = Number(process.env.MAX_PAGE_SIZE || 50);
@@ -77,6 +72,8 @@ function optionalEnv(name) {
 
 let eurLexClient;
 let judilibreClient;
+let legifranceClient;
+let frenchCaseLawRouter;
 try {
   eurLexClient = new EurLexSoapClient({
     username: requiredEnv("EURLEX_USERNAME"),
@@ -89,6 +86,18 @@ try {
     clientId: optionalEnv("PISTE_SANDBOX_CLIENT_ID"),
     clientSecret: optionalEnv("PISTE_SANDBOX_CLIENT_SECRET"),
     logger
+  });
+  legifranceClient = new LegifranceClient({
+    apiKey: optionalEnv("PISTE_SANDBOX_API_KEY"),
+    clientId: optionalEnv("PISTE_SANDBOX_CLIENT_ID"),
+    clientSecret: optionalEnv("PISTE_SANDBOX_CLIENT_SECRET"),
+    logger
+  });
+  frenchCaseLawRouter = new FrenchCaseLawRouter({
+    judilibreClient,
+    legifranceClient,
+    maxPageSize: cli.maxPageSize,
+    defaultTimeoutMs: cli.defaultTimeoutMs
   });
 } catch (error) {
   logger.error("Server configuration error", { message: error.message });
@@ -325,14 +334,60 @@ const tools = [
   {
     name: "search_french_case_law",
     description:
-      "Search French judicial case law through the Judilibre API sandbox (Cour de cassation PISTE). Returns compact decision metadata and highlighted snippets.",
+      "Search French case law across Judilibre and Legifrance. In auto mode, judicial case law searches Judilibre first then falls back to Legifrance; administrative, constitutional, financial, and CNIL decisions use Legifrance directly.",
     inputSchema: {
       type: "object",
       additionalProperties: false,
       properties: {
+        source: {
+          type: "string",
+          enum: ["auto", "judilibre", "legifrance", "all"],
+          default: "auto",
+          description: "Source strategy. Use auto unless you need to force one source."
+        },
+        fallback: {
+          type: "string",
+          enum: ["when_empty", "when_no_exact_match", "never"],
+          default: "when_no_exact_match",
+          description:
+            "Fallback policy from Judilibre to Legifrance for judicial searches."
+        },
+        case_law_family: {
+          type: "string",
+          enum: [
+            "auto",
+            "judicial",
+            "administrative",
+            "constitutional",
+            "financial",
+            "cnil"
+          ],
+          default: "auto",
+          description:
+            "Case-law family. administrative=CETAT, constitutional=CONSTIT, financial=JUFI."
+        },
+        fond: {
+          type: "string",
+          enum: ["auto", "JURI", "CETAT", "CONSTIT", "JUFI", "CNIL"],
+          default: "auto",
+          description: "Explicit Legifrance fund when source includes Legifrance."
+        },
         query: {
           type: "string",
-          description: "Optional text query. If omitted, Judilibre may return an empty result set."
+          description: "Optional text query."
+        },
+        case_number: {
+          type: "string",
+          description:
+            "Optional case or decision number. Maps to NUM_AFFAIRE for JURI and NUM_DEC for CETAT/CONSTIT/JUFI."
+        },
+        ecli: {
+          type: "string",
+          description: "Optional ECLI exact filter where supported."
+        },
+        nor: {
+          type: "string",
+          description: "Optional NOR filter/search field for CONSTIT or CNIL."
         },
         operator: {
           type: "string",
@@ -391,8 +446,22 @@ const tools = [
         },
         sort: {
           type: "string",
-          enum: ["score", "scorepub", "date"],
+          enum: [
+            "score",
+            "scorepub",
+            "date",
+            "PERTINENCE",
+            "DATE_DESC",
+            "DATE_ASC",
+            "DATE_DECISION_DESC",
+            "DATE_DECISION_ASC"
+          ],
           default: "scorepub"
+        },
+        second_sort: {
+          type: "string",
+          enum: ["PERTINENCE", "DATE_DESC", "DATE_ASC", "DATE_DECISION_DESC", "DATE_DECISION_ASC"],
+          description: "Optional Legifrance secondary sort."
         },
         order: {
           type: "string",
@@ -403,7 +472,8 @@ const tools = [
           type: "integer",
           minimum: 0,
           default: 0,
-          description: "Judilibre page number. The first page is 0."
+          description:
+            "Zero-based page number exposed by this MCP. Converted to Legifrance's one-based pageNumber internally."
         },
         page_size: {
           type: "integer",
@@ -433,14 +503,58 @@ const tools = [
   {
     name: "get_french_case_law_decision",
     description:
-      "Retrieve one French judicial decision from Judilibre by decision id, with selectable text scope to avoid overlong responses.",
+      "Retrieve one French case-law decision from Judilibre or Legifrance, with selectable text scope. Can resolve Legifrance decisions by metadata when no id is known.",
     inputSchema: {
       type: "object",
       additionalProperties: false,
       properties: {
+        source: {
+          type: "string",
+          enum: ["auto", "judilibre", "legifrance"],
+          default: "auto"
+        },
+        fallback: {
+          type: "string",
+          enum: ["when_empty", "when_no_exact_match", "never"],
+          default: "when_no_exact_match"
+        },
+        case_law_family: {
+          type: "string",
+          enum: [
+            "auto",
+            "judicial",
+            "administrative",
+            "constitutional",
+            "financial",
+            "cnil"
+          ],
+          default: "auto"
+        },
+        fond: {
+          type: "string",
+          enum: ["auto", "JURI", "CETAT", "CONSTIT", "JUFI", "CNIL"],
+          default: "auto"
+        },
         id: {
           type: "string",
-          description: "Judilibre decision id returned by search_french_case_law."
+          description:
+            "Source decision id. Judilibre ids are 24-hex strings; Legifrance ids look like JURITEXT..., CETATEXT..., CONSTITEXT..., or CNILTEXT...."
+        },
+        case_number: {
+          type: "string",
+          description: "Optional case or decision number used to resolve a Legifrance decision if id is missing or Judilibre fails."
+        },
+        decision_date: {
+          type: "string",
+          description: "Optional ISO decision date YYYY-MM-DD used for exact fallback resolution."
+        },
+        ecli: {
+          type: "string",
+          description: "Optional ECLI used for exact fallback resolution."
+        },
+        nor: {
+          type: "string",
+          description: "Optional NOR used for CONSTIT/CNIL fallback resolution."
         },
         text_scope: {
           type: "string",
@@ -480,14 +594,70 @@ const tools = [
           maximum: 60000,
           description: "Optional timeout override"
         }
-      },
-      required: ["id"]
+      }
+    }
+  },
+  {
+    name: "get_french_case_law_taxonomy",
+    description:
+      "Retrieve unified French case-law taxonomy/schema metadata for Judilibre and Legifrance funds, including available Legifrance fields, filters, and sorts.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        source: {
+          type: "string",
+          enum: ["auto", "judilibre", "legifrance", "all"],
+          default: "auto"
+        },
+        case_law_family: {
+          type: "string",
+          enum: [
+            "auto",
+            "judicial",
+            "administrative",
+            "constitutional",
+            "financial",
+            "cnil"
+          ],
+          default: "auto"
+        },
+        fond: {
+          type: "string",
+          enum: ["auto", "JURI", "CETAT", "CONSTIT", "JUFI", "CNIL"],
+          default: "auto"
+        },
+        taxonomy_id: {
+          type: "string",
+          description:
+            "For Legifrance: fond, case_law_family, search_field, filter, sort. For Judilibre: jurisdiction, chamber, location, theme, solution, type, publication, field, zones, filetype."
+        },
+        key: {
+          type: "string",
+          description: "Optional Judilibre taxonomy key to resolve. Requires taxonomy_id."
+        },
+        value: {
+          type: "string",
+          description: "Optional Judilibre label to reverse-resolve. Requires taxonomy_id."
+        },
+        context_value: {
+          type: "string",
+          description:
+            "Optional Judilibre context value for contextual taxonomies, e.g. cc for chamber or tj/ca for location."
+        },
+        timeout_ms: {
+          type: "integer",
+          minimum: 1000,
+          maximum: 60000,
+          description: "Optional timeout override"
+        }
+      }
     }
   },
   {
     name: "get_judilibre_taxonomy",
     description:
-      "Retrieve Judilibre taxonomy values used by search filters, such as jurisdiction, chamber, location, theme, solution, type, publication, field, zones, and filetype.",
+      "Deprecated alias for get_french_case_law_taxonomy with source='judilibre'. Retrieve Judilibre taxonomy values used by search filters.",
     inputSchema: {
       type: "object",
       additionalProperties: false,
@@ -751,45 +921,21 @@ async function runGetCaseLawByCelex(args) {
 }
 
 async function runSearchFrenchCaseLaw(args) {
-  const { params, timeoutMs } = buildJudilibreSearchArgs(args, {
-    maxPageSize: cli.maxPageSize,
-    defaultTimeoutMs: cli.defaultTimeoutMs
-  });
-  const data = await judilibreClient.search({ params, timeoutMs });
-
-  return successResponse({
-    api: "judilibre",
-    environment: "sandbox",
-    search_params: params,
-    ...normalizeJudilibreSearchResponse(data)
-  });
+  return frenchCaseLawRouter.search(args);
 }
 
 async function runGetFrenchCaseLawDecision(args) {
-  const { params, textScope, timeoutMs } = buildJudilibreDecisionArgs(args, {
-    defaultTimeoutMs: cli.defaultTimeoutMs
-  });
-  const data = await judilibreClient.decision({ params, timeoutMs });
-  const decision = data?.result ?? data;
+  return frenchCaseLawRouter.getDecision(args);
+}
 
-  return successResponse({
-    api: "judilibre",
-    environment: "sandbox",
-    decision: normalizeJudilibreDecision(decision, { textScope })
-  });
+async function runGetFrenchCaseLawTaxonomy(args) {
+  return frenchCaseLawRouter.taxonomy(args);
 }
 
 async function runGetJudilibreTaxonomy(args) {
-  const { params, timeoutMs } = buildJudilibreTaxonomyArgs(args, {
-    defaultTimeoutMs: cli.defaultTimeoutMs
-  });
-  const data = await judilibreClient.taxonomy({ params, timeoutMs });
-
-  return successResponse({
-    api: "judilibre",
-    environment: "sandbox",
-    taxonomy_params: params,
-    taxonomy: data?.result ?? data
+  return frenchCaseLawRouter.taxonomy({
+    ...args,
+    source: "judilibre"
   });
 }
 
@@ -830,6 +976,10 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
     if (toolName === "get_french_case_law_decision") {
       return toolTextPayload(await runGetFrenchCaseLawDecision(args));
+    }
+
+    if (toolName === "get_french_case_law_taxonomy") {
+      return toolTextPayload(await runGetFrenchCaseLawTaxonomy(args));
     }
 
     if (toolName === "get_judilibre_taxonomy") {

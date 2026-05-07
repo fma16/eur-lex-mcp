@@ -12,6 +12,8 @@ npm install
 EURLEX_USERNAME="..." \
 EURLEX_PASSWORD="..." \
 PISTE_SANDBOX_API_KEY="..." \
+PISTE_SANDBOX_CLIENT_ID="..." \
+PISTE_SANDBOX_CLIENT_SECRET="..." \
 node server/index.js --log-level=debug
 ```
 
@@ -82,15 +84,45 @@ or
 }
 ```
 
-Judilibre sandbox smoke test:
+French case-law smoke tests:
 
 ```json
 {
   "query": "responsabilite contractuelle",
+  "case_law_family": "judicial",
   "jurisdiction": ["cc"],
   "page": 0,
   "page_size": 5,
   "resolve_references": true
+}
+```
+
+Administrative/constitutional/financial requests route to Legifrance:
+
+```json
+{
+  "case_law_family": "administrative",
+  "query": "permis de construire",
+  "page": 0,
+  "page_size": 5
+}
+```
+
+```json
+{
+  "case_law_family": "constitutional",
+  "case_number": "2023-1067 QPC",
+  "page": 0,
+  "page_size": 5
+}
+```
+
+```json
+{
+  "case_law_family": "financial",
+  "query": "gestion de fait",
+  "page": 0,
+  "page_size": 5
 }
 ```
 
