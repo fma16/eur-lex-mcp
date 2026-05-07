@@ -2,10 +2,10 @@
   "$schema": "https://raw.githubusercontent.com/modelcontextprotocol/mcpb/main/dist/mcpb-manifest.schema.json",
   "manifest_version": "0.3",
   "name": "eur-lex-search",
-  "display_name": "EUR-Lex Search",
+  "display_name": "EUR-Lex and Judilibre Search",
   "version": "1.0.0",
-  "description": "Search EUR-Lex legal documents using MCP tools.",
-  "long_description": "Local MCP Bundle for querying EUR-Lex via SOAP with strict input validation, timeout controls, and consistent structured JSON responses for tool consumers.",
+  "description": "Search EUR-Lex legal documents and French judicial case law using MCP tools.",
+  "long_description": "Local MCP Bundle for querying EUR-Lex via SOAP and Judilibre via PISTE sandbox OAuth with strict input validation, timeout controls, and consistent structured JSON responses for tool consumers.",
   "author": {
     "name": "EUR-Lex MCP Contributors"
   },
@@ -16,8 +16,10 @@
   ],
   "keywords": [
     "eur-lex",
+    "judilibre",
     "legal",
     "eu-law",
+    "french-case-law",
     "mcp",
     "search"
   ],
@@ -35,6 +37,9 @@
       "env": {
         "EURLEX_USERNAME": "${user_config.eurlex_username}",
         "EURLEX_PASSWORD": "${user_config.eurlex_password}",
+        "PISTE_SANDBOX_API_KEY": "${user_config.piste_sandbox_api_key}",
+        "PISTE_SANDBOX_CLIENT_ID": "${user_config.piste_sandbox_client_id}",
+        "PISTE_SANDBOX_CLIENT_SECRET": "${user_config.piste_sandbox_client_secret}",
         "ALLOW_INSECURE_HTTP": "${user_config.allow_insecure_http}"
       }
     }
@@ -63,6 +68,18 @@
     {
       "name": "get_case_law_by_celex",
       "description": "Fetch a European Union case-law document by exact CELEX sector-6 identifier."
+    },
+    {
+      "name": "search_french_case_law",
+      "description": "Search French judicial case law through the Judilibre API sandbox with simple filters."
+    },
+    {
+      "name": "get_french_case_law_decision",
+      "description": "Fetch a French judicial decision from Judilibre by id with selectable text scope."
+    },
+    {
+      "name": "get_judilibre_taxonomy",
+      "description": "Fetch Judilibre taxonomy values used by French case-law search filters."
     }
   ],
   "compatibility": {
@@ -87,6 +104,27 @@
       "type": "string",
       "title": "EUR-Lex Password",
       "description": "EUR-Lex webservice password.",
+      "required": true,
+      "sensitive": true
+    },
+    "piste_sandbox_client_id": {
+      "type": "string",
+      "title": "PISTE Sandbox Client ID",
+      "description": "Optional PISTE OAuth client id for the Judilibre sandbox API. Used only when no API key is configured.",
+      "required": false,
+      "sensitive": true
+    },
+    "piste_sandbox_client_secret": {
+      "type": "string",
+      "title": "PISTE Sandbox Client Secret",
+      "description": "Optional PISTE OAuth client secret for the Judilibre sandbox API. Used only when no API key is configured.",
+      "required": false,
+      "sensitive": true
+    },
+    "piste_sandbox_api_key": {
+      "type": "string",
+      "title": "PISTE Sandbox API Key",
+      "description": "PISTE API key used as the Judilibre sandbox KeyId header.",
       "required": true,
       "sensitive": true
     },

@@ -25,6 +25,15 @@ import {
   parseCaseLawCelex,
   parseCaseLawYear
 } from "../server/case-law.js";
+import {
+  JudilibreClient,
+  buildJudilibreDecisionArgs,
+  buildJudilibreSearchArgs,
+  buildJudilibreTaxonomyArgs,
+  buildJudilibreUrl,
+  normalizeJudilibreDecision,
+  normalizeJudilibreSearchResponse
+} from "../server/judilibre-client.js";
 
 test("validation utilities enforce constraints", () => {
   assert.equal(parseLanguage("EN"), "en");
@@ -172,6 +181,213 @@ test("case-law query builder scopes searches to EU case-law", () => {
   assert.equal(parseCaseLawYear("2020"), 2020);
   assert.throws(() => parseCaseLawYear(1949), /Invalid year/);
   assert.throws(() => buildCaseLawExpertQuery({ text: 'bad "quote' }), /double quotes/);
+});
+
+test("Judilibre search args validate filters and keep zero-based pagination", () => {
+  const parsed = buildJudilibreSearchArgs(
+    {
+      query: "responsabilite contractuelle",
+      operator: "exact",
+      jurisdiction: "cc",
+      chamber: ["civ1", "comm"],
+      field: ["motivations"],
+      date_start: "2024-01-01",
+      date_end: "2024-12-31",
+      page: 0,
+      page_size: 50,
+      resolve_references: true
+    },
+    { maxPageSize: 100, defaultTimeoutMs: 15000 }
+  );
+
+  assert.equal(parsed.timeoutMs, 15000);
+  assert.equal(parsed.params.page, 0);
+  assert.equal(parsed.params.page_size, 50);
+  assert.equal(parsed.params.operator, "exact");
+  assert.deepEqual(parsed.params.jurisdiction, ["cc"]);
+  assert.deepEqual(parsed.params.chamber, ["civ1", "comm"]);
+  assert.equal(parsed.params.resolve_references, "true");
+
+  assert.throws(
+    () => buildJudilibreSearchArgs({ page: -1 }, { maxPageSize: 50, defaultTimeoutMs: 15000 }),
+    /Invalid page/
+  );
+  assert.throws(
+    () =>
+      buildJudilibreSearchArgs(
+        { page_size: 51 },
+        { maxPageSize: 100, defaultTimeoutMs: 15000 }
+      ),
+    /Invalid page_size/
+  );
+});
+
+test("Judilibre decision and taxonomy args enforce required combinations", () => {
+  const decisionArgs = buildJudilibreDecisionArgs(
+    { id: "decision-123", text_scope: "motivations", query: "faute" },
+    { defaultTimeoutMs: 15000 }
+  );
+
+  assert.deepEqual(decisionArgs.params, {
+    id: "decision-123",
+    resolve_references: "true",
+    query: "faute",
+    operator: "and"
+  });
+  assert.equal(decisionArgs.textScope, "motivations");
+
+  assert.throws(
+    () => buildJudilibreDecisionArgs({}, { defaultTimeoutMs: 15000 }),
+    /Invalid id/
+  );
+  assert.throws(
+    () =>
+      buildJudilibreTaxonomyArgs(
+        { key: "cc" },
+        { defaultTimeoutMs: 15000 }
+      ),
+    /taxonomy_id is required/
+  );
+  assert.throws(
+    () =>
+      buildJudilibreTaxonomyArgs(
+        { taxonomy_id: "jurisdiction", key: "cc", value: "Cour de cassation" },
+        { defaultTimeoutMs: 15000 }
+      ),
+    /mutually exclusive/
+  );
+});
+
+test("Judilibre URL builder repeats array filters", () => {
+  const url = buildJudilibreUrl("https://example.test/judilibre", "/search", {
+    query: "faute",
+    jurisdiction: ["cc", "ca"],
+    resolve_references: "true"
+  });
+
+  assert.equal(url.pathname, "/judilibre/search");
+  assert.equal(url.searchParams.get("query"), "faute");
+  assert.deepEqual(url.searchParams.getAll("jurisdiction"), ["cc", "ca"]);
+  assert.equal(url.searchParams.get("resolve_references"), "true");
+});
+
+test("Judilibre normalizers compact search results and extract decision zones", () => {
+  const search = normalizeJudilibreSearchResponse({
+    total: 1,
+    page: 0,
+    page_size: 10,
+    results: [
+      {
+        id: "decision-123",
+        jurisdiction: "cc",
+        chamber: "civ1",
+        decision_date: "2024-02-01",
+        solution: "cassation",
+        text: "not included in search summary",
+        highlights: {
+          text: ["<em>faute</em> contractuelle"],
+          empty: []
+        }
+      }
+    ]
+  });
+
+  assert.equal(search.total, 1);
+  assert.equal(search.results[0].id, "decision-123");
+  assert.equal(search.results[0].text, undefined);
+  assert.deepEqual(search.results[0].highlights, {
+    text: ["<em>faute</em> contractuelle"]
+  });
+
+  const text = "INTRO EXPOSE MOYENS MOTIFS DISPO ANNEXES";
+  const decision = normalizeJudilibreDecision(
+    {
+      id: "decision-123",
+      text,
+      zones: {
+        motivations: [{ start: text.indexOf("MOTIFS"), end: text.indexOf("MOTIFS") + 6 }],
+        dispositif: [{ start: text.indexOf("DISPO"), end: text.indexOf("DISPO") + 5 }]
+      }
+    },
+    { textScope: "motivations" }
+  );
+
+  assert.equal(decision.text_scope, "motivations");
+  assert.deepEqual(decision.available_zones, ["motivations", "dispositif"]);
+  assert.equal(decision.fragments.length, 1);
+  assert.equal(decision.fragments[0].text, "MOTIFS");
+});
+
+test("Judilibre client requests and caches PISTE OAuth tokens", async () => {
+  const calls = [];
+  const fetchImpl = async (url, options) => {
+    calls.push({ url: String(url), options });
+    if (String(url).includes("/oauth/token")) {
+      return new Response(
+        JSON.stringify({
+          access_token: "sandbox-token",
+          expires_in: 3600
+        }),
+        { status: 200 }
+      );
+    }
+    return new Response(JSON.stringify({ results: [] }), { status: 200 });
+  };
+
+  const client = new JudilibreClient({
+    clientId: "client-id",
+    clientSecret: "client-secret",
+    apiUrl: "https://example.test/cassation/judilibre/v1.0",
+    tokenUrl: "https://example.test/api/oauth/token",
+    fetchImpl
+  });
+
+  await client.search({
+    params: { query: "faute", jurisdiction: ["cc", "ca"], page: 0, page_size: 5 },
+    timeoutMs: 15000
+  });
+  await client.search({
+    params: { query: "contrat", jurisdiction: ["cc"], page: 0, page_size: 5 },
+    timeoutMs: 15000
+  });
+
+  assert.equal(calls.length, 3);
+  assert.equal(calls[0].options.body.get("grant_type"), "client_credentials");
+  assert.equal(calls[0].options.body.get("client_id"), "client-id");
+  assert.equal(calls[0].options.body.get("client_secret"), "client-secret");
+  assert.equal(calls[0].options.body.get("scope"), "openid");
+  assert.equal(calls[1].options.headers.Authorization, "Bearer sandbox-token");
+
+  const firstSearchUrl = new URL(calls[1].url);
+  assert.equal(firstSearchUrl.pathname, "/cassation/judilibre/v1.0/search");
+  assert.deepEqual(firstSearchUrl.searchParams.getAll("jurisdiction"), ["cc", "ca"]);
+});
+
+test("Judilibre client can authenticate API requests with PISTE KeyId", async () => {
+  const calls = [];
+  const fetchImpl = async (url, options) => {
+    calls.push({ url: String(url), options });
+    return new Response(JSON.stringify({ results: [] }), { status: 200 });
+  };
+
+  const client = new JudilibreClient({
+    apiKey: "sandbox-api-key",
+    clientId: "unused-client-id",
+    clientSecret: "unused-client-secret",
+    apiUrl: "https://example.test/cassation/judilibre/v1.0",
+    tokenUrl: "https://example.test/api/oauth/token",
+    fetchImpl
+  });
+
+  await client.search({
+    params: { query: "faute", jurisdiction: ["cc"], page: 0, page_size: 5 },
+    timeoutMs: 15000
+  });
+
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].options.headers.KeyId, "sandbox-api-key");
+  assert.equal(calls[0].options.headers.Authorization, undefined);
+  assert.equal(new URL(calls[0].url).pathname, "/cassation/judilibre/v1.0/search");
 });
 
 test("formatEurLexHttpError clarifies WS_QUERY_SYNTAX_ERROR", () => {

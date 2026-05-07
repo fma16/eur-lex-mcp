@@ -27,6 +27,14 @@ import {
 } from "./validation.js";
 import { errorResponse, successResponse, toolTextPayload } from "./responses.js";
 import { buildCaseLawExpertQuery, parseCaseLawCelex } from "./case-law.js";
+import {
+  JudilibreClient,
+  buildJudilibreDecisionArgs,
+  buildJudilibreSearchArgs,
+  buildJudilibreTaxonomyArgs,
+  normalizeJudilibreDecision,
+  normalizeJudilibreSearchResponse
+} from "./judilibre-client.js";
 
 const DEFAULT_TIMEOUT_MS = Number(process.env.DEFAULT_TIMEOUT_MS || 15000);
 const MAX_PAGE_SIZE = Number(process.env.MAX_PAGE_SIZE || 50);
@@ -62,12 +70,24 @@ function requiredEnv(name) {
   return value.trim();
 }
 
+function optionalEnv(name) {
+  const value = process.env[name];
+  return value && value.trim() ? value.trim() : undefined;
+}
+
 let eurLexClient;
+let judilibreClient;
 try {
   eurLexClient = new EurLexSoapClient({
     username: requiredEnv("EURLEX_USERNAME"),
     password: requiredEnv("EURLEX_PASSWORD"),
     allowInsecureHttp: parseBoolean(process.env.ALLOW_INSECURE_HTTP, false),
+    logger
+  });
+  judilibreClient = new JudilibreClient({
+    apiKey: optionalEnv("PISTE_SANDBOX_API_KEY"),
+    clientId: optionalEnv("PISTE_SANDBOX_CLIENT_ID"),
+    clientSecret: optionalEnv("PISTE_SANDBOX_CLIENT_SECRET"),
     logger
   });
 } catch (error) {
@@ -301,6 +321,203 @@ const tools = [
       },
       required: ["celex"]
     }
+  },
+  {
+    name: "search_french_case_law",
+    description:
+      "Search French judicial case law through the Judilibre API sandbox (Cour de cassation PISTE). Returns compact decision metadata and highlighted snippets.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        query: {
+          type: "string",
+          description: "Optional text query. If omitted, Judilibre may return an empty result set."
+        },
+        operator: {
+          type: "string",
+          enum: ["or", "and", "exact"],
+          default: "and",
+          description: "Logical operator for query terms."
+        },
+        field: {
+          type: "array",
+          items: { type: "string" },
+          description:
+            "Optional targeted content fields, e.g. expose, moyens, motivations, dispositif, annexes."
+        },
+        jurisdiction: {
+          type: "array",
+          items: { type: "string" },
+          description: "Optional jurisdiction keys, e.g. cc, ca, tj, tcom."
+        },
+        chamber: {
+          type: "array",
+          items: { type: "string" },
+          description: "Optional chamber keys, e.g. civ1, civ2, civ3, comm, soc, cr."
+        },
+        location: {
+          type: "array",
+          items: { type: "string" },
+          description: "Optional court location keys from the location taxonomy."
+        },
+        theme: {
+          type: "array",
+          items: { type: "string" },
+          description: "Optional theme keys from the theme taxonomy."
+        },
+        solution: {
+          type: "array",
+          items: { type: "string" },
+          description: "Optional solution keys from the solution taxonomy."
+        },
+        type: {
+          type: "array",
+          items: { type: "string" },
+          description: "Optional decision type keys from the type taxonomy."
+        },
+        publication: {
+          type: "array",
+          items: { type: "string" },
+          description: "Optional publication level keys from the publication taxonomy."
+        },
+        date_start: {
+          type: "string",
+          description: "Optional ISO date or datetime lower bound, e.g. 2024-01-01."
+        },
+        date_end: {
+          type: "string",
+          description: "Optional ISO date or datetime upper bound, e.g. 2024-12-31."
+        },
+        sort: {
+          type: "string",
+          enum: ["score", "scorepub", "date"],
+          default: "scorepub"
+        },
+        order: {
+          type: "string",
+          enum: ["asc", "desc"],
+          default: "desc"
+        },
+        page: {
+          type: "integer",
+          minimum: 0,
+          default: 0,
+          description: "Judilibre page number. The first page is 0."
+        },
+        page_size: {
+          type: "integer",
+          minimum: 1,
+          maximum: 50,
+          default: 10
+        },
+        resolve_references: {
+          type: "boolean",
+          default: true,
+          description: "Resolve taxonomy keys to labels when Judilibre supports it."
+        },
+        particular_interest: {
+          type: "boolean",
+          default: false,
+          description: "Restrict results to decisions marked as having particular interest."
+        },
+        timeout_ms: {
+          type: "integer",
+          minimum: 1000,
+          maximum: 60000,
+          description: "Optional timeout override"
+        }
+      }
+    }
+  },
+  {
+    name: "get_french_case_law_decision",
+    description:
+      "Retrieve one French judicial decision from Judilibre by decision id, with selectable text scope to avoid overlong responses.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        id: {
+          type: "string",
+          description: "Judilibre decision id returned by search_french_case_law."
+        },
+        text_scope: {
+          type: "string",
+          enum: [
+            "metadata",
+            "full_text",
+            "zones",
+            "introduction",
+            "expose",
+            "moyens",
+            "motivations",
+            "dispositif",
+            "annexes"
+          ],
+          default: "full_text",
+          description:
+            "Text to return. Use metadata for no text, zones for all structured sections, or one named zone."
+        },
+        resolve_references: {
+          type: "boolean",
+          default: true,
+          description: "Resolve taxonomy keys to labels when Judilibre supports it."
+        },
+        query: {
+          type: "string",
+          description: "Optional query used by Judilibre to highlight matching terms."
+        },
+        operator: {
+          type: "string",
+          enum: ["or", "and", "exact"],
+          default: "and",
+          description: "Logical operator for optional query highlighting."
+        },
+        timeout_ms: {
+          type: "integer",
+          minimum: 1000,
+          maximum: 60000,
+          description: "Optional timeout override"
+        }
+      },
+      required: ["id"]
+    }
+  },
+  {
+    name: "get_judilibre_taxonomy",
+    description:
+      "Retrieve Judilibre taxonomy values used by search filters, such as jurisdiction, chamber, location, theme, solution, type, publication, field, zones, and filetype.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        taxonomy_id: {
+          type: "string",
+          description:
+            "Optional taxonomy id, e.g. jurisdiction, chamber, location, theme, solution, type, publication, field, zones, filetype."
+        },
+        key: {
+          type: "string",
+          description: "Optional taxonomy key to resolve. Requires taxonomy_id."
+        },
+        value: {
+          type: "string",
+          description: "Optional label to reverse-resolve. Requires taxonomy_id."
+        },
+        context_value: {
+          type: "string",
+          description:
+            "Optional context value for contextual taxonomies, e.g. cc for chamber or tj/ca for location."
+        },
+        timeout_ms: {
+          type: "integer",
+          minimum: 1000,
+          maximum: 60000,
+          description: "Optional timeout override"
+        }
+      }
+    }
   }
 ];
 
@@ -533,6 +750,49 @@ async function runGetCaseLawByCelex(args) {
   });
 }
 
+async function runSearchFrenchCaseLaw(args) {
+  const { params, timeoutMs } = buildJudilibreSearchArgs(args, {
+    maxPageSize: cli.maxPageSize,
+    defaultTimeoutMs: cli.defaultTimeoutMs
+  });
+  const data = await judilibreClient.search({ params, timeoutMs });
+
+  return successResponse({
+    api: "judilibre",
+    environment: "sandbox",
+    search_params: params,
+    ...normalizeJudilibreSearchResponse(data)
+  });
+}
+
+async function runGetFrenchCaseLawDecision(args) {
+  const { params, textScope, timeoutMs } = buildJudilibreDecisionArgs(args, {
+    defaultTimeoutMs: cli.defaultTimeoutMs
+  });
+  const data = await judilibreClient.decision({ params, timeoutMs });
+  const decision = data?.result ?? data;
+
+  return successResponse({
+    api: "judilibre",
+    environment: "sandbox",
+    decision: normalizeJudilibreDecision(decision, { textScope })
+  });
+}
+
+async function runGetJudilibreTaxonomy(args) {
+  const { params, timeoutMs } = buildJudilibreTaxonomyArgs(args, {
+    defaultTimeoutMs: cli.defaultTimeoutMs
+  });
+  const data = await judilibreClient.taxonomy({ params, timeoutMs });
+
+  return successResponse({
+    api: "judilibre",
+    environment: "sandbox",
+    taxonomy_params: params,
+    taxonomy: data?.result ?? data
+  });
+}
+
 server.setRequestHandler(CallToolRequestSchema, async (request) => {
   const toolName = request.params.name;
   const args = request.params.arguments || {};
@@ -562,6 +822,18 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
     if (toolName === "get_case_law_by_celex") {
       return toolTextPayload(await runGetCaseLawByCelex(args));
+    }
+
+    if (toolName === "search_french_case_law") {
+      return toolTextPayload(await runSearchFrenchCaseLaw(args));
+    }
+
+    if (toolName === "get_french_case_law_decision") {
+      return toolTextPayload(await runGetFrenchCaseLawDecision(args));
+    }
+
+    if (toolName === "get_judilibre_taxonomy") {
+      return toolTextPayload(await runGetJudilibreTaxonomy(args));
     }
 
     throw new McpError(ErrorCode.MethodNotFound, `Unknown tool: ${toolName}`);

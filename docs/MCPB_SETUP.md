@@ -9,7 +9,10 @@ npm install
 ## 2) Local dry run (stdio)
 
 ```bash
-EURLEX_USERNAME="..." EURLEX_PASSWORD="..." node server/index.js --log-level=debug
+EURLEX_USERNAME="..." \
+EURLEX_PASSWORD="..." \
+PISTE_SANDBOX_API_KEY="..." \
+node server/index.js --log-level=debug
 ```
 
 The process will wait for MCP stdio messages from a host client.
@@ -42,6 +45,8 @@ Expected output: a `.mcpb` archive containing `manifest.json`, `server/`, `packa
 2. Confirm install UI asks for:
    - EUR-Lex username
    - EUR-Lex password
+   - PISTE sandbox API key
+   - optional PISTE sandbox client id/client secret fallback
    - optional timeout/log settings
 3. Invoke `expert_search` with:
 
@@ -74,5 +79,27 @@ or
     "message": "...",
     "code": "..."
   }
+}
+```
+
+Judilibre sandbox smoke test:
+
+```json
+{
+  "query": "responsabilite contractuelle",
+  "jurisdiction": ["cc"],
+  "page": 0,
+  "page_size": 5,
+  "resolve_references": true
+}
+```
+
+Then call `get_french_case_law_decision` with a returned decision `id` and a bounded scope such as:
+
+```json
+{
+  "id": "...",
+  "text_scope": "motivations",
+  "resolve_references": true
 }
 ```
